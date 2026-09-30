@@ -4,7 +4,7 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** ready-for-human（界面待浏览器手动验收）
 
 - [ ] 打开笔记时默认选中根结点
 - [ ] ↑ 移动到父结点；在根结点上按 ↑ 不动

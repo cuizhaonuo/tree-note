@@ -10,6 +10,7 @@
   --link: #8c959f;
   --error: #cf222e;
   --code-bg: #eff1f3;
+  --selected: #fb8500;
   font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   color: var(--text);
   background: var(--bg);
@@ -27,6 +28,7 @@
     --link: #484f58;
     --error: #ff7b72;
     --code-bg: #2d333b;
+    --selected: #ffa94d;
   }
 }
 
@@ -99,6 +101,9 @@ button { font: inherit; color: inherit; }
   border-style: dashed;
   border-color: var(--idea);
   background: var(--idea-bg);
+}
+.node.selected {
+  box-shadow: 0 0 0 3px var(--selected);
 }
 .node-meta {
   display: flex;

@@ -24,3 +24,14 @@ export function newNodeId(): string {
   nextId++;
   return `n${nextId}`;
 }
+
+/** 深度优先找第一个满足条件的结点。 */
+export function findNode(root: TreeNode, predicate: (node: TreeNode) => boolean): TreeNode | undefined {
+  const stack = [root];
+  while (stack.length) {
+    const node = stack.pop()!;
+    if (predicate(node)) return node;
+    stack.push(...node.children);
+  }
+  return undefined;
+}
