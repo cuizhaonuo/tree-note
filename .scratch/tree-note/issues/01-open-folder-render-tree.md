@@ -4,11 +4,15 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** ready-for-human（界面待浏览器手动验收）
 
 - [ ] 可以通过 File System Access API 选择并授权一个文件夹，界面列出其中所有 `.md` 格式的笔记，按最近修改时间排序
 - [ ] 打开一篇笔记后，标题显示在画布顶部，树按 d3-hierarchy 的 tidy tree 布局自上而下渲染，连线用 SVG 绘制
 - [ ] 事件和想法的样式明显不同；结点显示时间；行内 Markdown（加粗、链接、行内代码）被正确渲染，多行文本也正确显示
-- [ ] 核心模块能把约定格式的 Markdown 解析成笔记（标题 + 唯一根结点的树），也能写回 Markdown；解析后再写回，内容保持不变
-- [ ] 遇到格式错误的文件（比如没有根结点、有多个顶层列表项、前缀无法解析）时给出明确的错误提示，应用不崩溃
-- [ ] 格式部分有 Vitest 测试覆盖：round-trip 稳定、多行文本、行内 Markdown 原样保留、错误情况
+- [x] 核心模块能把约定格式的 Markdown 解析成笔记（标题 + 唯一根结点的树），也能写回 Markdown；解析后再写回，内容保持不变
+- [x] 遇到格式错误的文件（比如没有根结点、有多个顶层列表项、前缀无法解析）时给出明确的错误提示，应用不崩溃
+- [x] 格式部分有 Vitest 测试覆盖：round-trip 稳定、多行文本、行内 Markdown 原样保留、错误情况
+
+## Comments
+
+- 2026-09-30 (agent)：核心“格式”模块 `src/core/format.ts` 已实现并有 22 个 Vitest 测试；界面（文件夹授权、列表、树渲染）已实现，通过了类型检查和构建，但尚未在浏览器中手动验收。可用 `npm run dev` 打开后选择 `examples/vault/` 验证。另把 d3-hierarchy 布局放到了 `src/core/layout.ts`，供 02 的导航使用。
