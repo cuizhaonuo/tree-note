@@ -9,7 +9,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { select } from "d3-selection";
 import "d3-transition";
 import { zoom, zoomIdentity, type ZoomBehavior } from "d3-zoom";
-import { hiddenCount, toggleCollapsed } from "../core/collapse";
+import { expand, hiddenCount, toggleCollapsed } from "../core/collapse";
 import { applyCommand, type Command, type EditorState } from "../core/commands";
 import { layoutTree, type LayoutOptions, type NodeBox } from "../core/layout";
 import { navigate, type Direction } from "../core/navigation";
@@ -59,8 +59,8 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
     const viewport = viewportEl.current!;
     const behavior = zoom<HTMLDivElement, unknown>()
       .scaleExtent(SCALE_EXTENT)
-      // 编辑框里的拖动用来选择文字，不平移画布。
-      .filter((e: Event) => defaultZoomFilter(e) && !isTextInput(e.target))
+      // 编辑框里的拖动用来选择文字，不平移画布；滚轮照常缩放。
+      .filter((e: Event) => defaultZoomFilter(e) && (e.type === "wheel" || !isTextInput(e.target)))
       .on("zoom", ({ transform }) => {
         treeEl.current!.style.transform = transform.toString();
       });
@@ -98,7 +98,7 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
       } else if (e.key === "Enter") {
         e.preventDefault();
         // 新的子结点要能看见并编辑，所以先展开选中的结点。
-        if (!e.shiftKey) setCollapsed((c) => withoutId(c, state.selectedId));
+        if (!e.shiftKey) setCollapsed((c) => expand(c, state.selectedId));
         const time = formatNodeTime(new Date());
         dispatch(e.shiftKey ? { type: "addSibling", time } : { type: "addChild", time });
       } else if (e.key === "F2" && !e.shiftKey) {
@@ -111,19 +111,24 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
   }, [note, layout, collapsed, state.selectedId, state.editingId, dispatch]);
 
   // 只在选中结点变化或折叠/展开时居中，其他重新布局不会把用户手动拖开的视野拉回来。
+  // 新出现的结点要等测量出真实高度后再居中，否则多行结点会偏。
   // 当前缩放比例保持不变，translateTo 按这个比例把结点中心移到视野中央。
-  const selectedBox = layout.boxes.find((b) => b.node.id === state.selectedId);
   // 刚打开时选中的是根结点，它已经在视野顶部了，不需要居中。
-  const centeredOn = useRef({ selectedId: state.selectedId, collapsed });
+  const lastCenteredFor = useRef({ selectedId: state.selectedId, collapsed });
+  const centerPending = useRef(false);
   useEffect(() => {
-    if (centeredOn.current.selectedId === state.selectedId && centeredOn.current.collapsed === collapsed) return;
-    centeredOn.current = { selectedId: state.selectedId, collapsed };
-    if (!selectedBox || !zoomBehavior.current) return;
+    if (lastCenteredFor.current.selectedId !== state.selectedId || lastCenteredFor.current.collapsed !== collapsed) {
+      lastCenteredFor.current = { selectedId: state.selectedId, collapsed };
+      centerPending.current = true;
+    }
+    const box = layout.boxes.find((b) => b.node.id === state.selectedId);
+    if (!centerPending.current || !box || !heights.has(box.node.id) || !zoomBehavior.current) return;
+    centerPending.current = false;
     select(viewportEl.current!)
       .transition()
       .duration(250)
-      .call(zoomBehavior.current.translateTo, selectedBox.x + selectedBox.width / 2, selectedBox.y + selectedBox.height / 2);
-  }, [state.selectedId, collapsed]);
+      .call(zoomBehavior.current.translateTo, box.x + box.width / 2, box.y + box.height / 2);
+  }, [state.selectedId, collapsed, layout, heights]);
 
   // 结点高度随文本行数变化：渲染后测量，高度有变化再重新布局。
   useLayoutEffect(() => {
@@ -242,13 +247,6 @@ function linkPath(parent: NodeBox, child: NodeBox): string {
   const y2 = child.y;
   const midY = (y1 + y2) / 2;
   return `M${x1},${y1} C${x1},${midY} ${x2},${midY} ${x2},${y2}`;
-}
-
-function withoutId(set: ReadonlySet<string>, id: string): ReadonlySet<string> {
-  if (!set.has(id)) return set;
-  const next = new Set(set);
-  next.delete(id);
-  return next;
 }
 
 /** d3-zoom 的默认过滤：忽略右键；Ctrl+滚轮是触控板的双指缩放。 */

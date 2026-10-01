@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toggleCollapsed, hiddenCount } from "./collapse";
+import { expand, hiddenCount, toggleCollapsed } from "./collapse";
 import { parseNote } from "./format";
 import { findNode, type TreeNode } from "./note";
 
@@ -44,6 +44,21 @@ describe("toggleCollapsed", () => {
     const a1 = nodeOf(root, "A1");
     const a = nodeOf(root, "A");
     expect([...toggleCollapsed(new Set([a1.id]), a)].sort()).toEqual([a.id, a1.id].sort());
+  });
+});
+
+describe("expand", () => {
+  it("expands a collapsed node and leaves the others collapsed", () => {
+    const root = parseTree(TREE);
+    const a = nodeOf(root, "A");
+    const a1 = nodeOf(root, "A1");
+    expect([...expand(new Set([a.id, a1.id]), a.id)]).toEqual([a1.id]);
+  });
+
+  it("does nothing on a node that is already expanded", () => {
+    const root = parseTree(TREE);
+    const collapsed = new Set([nodeOf(root, "A1").id]);
+    expect(expand(collapsed, nodeOf(root, "A").id)).toBe(collapsed);
   });
 });
 

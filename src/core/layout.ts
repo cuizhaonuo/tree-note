@@ -43,7 +43,7 @@ export function layoutTree(
   root: TreeNode,
   heights: ReadonlyMap<string, number>,
   options: LayoutOptions,
-  collapsed: ReadonlySet<string> = new Set(),
+  collapsed: ReadonlySet<string>,
 ): TreeLayout {
   const { nodeWidth, horizontalGap, verticalGap, defaultHeight } = options;
   const heightOf = (node: TreeNode) => heights.get(node.id) ?? defaultHeight;
