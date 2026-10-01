@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyCommand, initialEditorState, newNoteState, type Command, type EditorState } from "./commands";
+import { applyCommand, commandError, initialEditorState, newNoteState, type Command, type EditorState } from "./commands";
 import { parseNote, serializeNote } from "./format";
 import { findNode } from "./note";
 
@@ -236,5 +236,247 @@ describe("newNoteState (Ctrl+N)", () => {
 - [事件 2026-10-01 12:00]
 `);
     expect(state.editingId).toBeNull();
+  });
+});
+
+describe("deleteSubtree (Delete)", () => {
+  it("removes the selected node with its whole subtree and selects the parent", () => {
+    const state = run(selecting(open(TREE), "A"), [{ type: "deleteSubtree" }]);
+    expect(serializeNote(state.note)).toBe(`# 命令
+
+- [事件 2026-09-30 09:00] 根
+  - [事件 2026-09-30 11:00] B
+`);
+    expect(textOf(state, state.selectedId)).toBe("根");
+  });
+
+  it("refuses to delete the root and explains why", () => {
+    const before = open(TREE);
+    expect(commandError(before, { type: "deleteSubtree" })).toBe("根结点不能删除");
+    expect(applyCommand(before, { type: "deleteSubtree" })).toBe(before);
+  });
+});
+
+describe("cut (x) and paste (v)", () => {
+  it("marks the selected node as cut without changing the note", () => {
+    const before = selecting(open(TREE), "A");
+    const state = run(before, [{ type: "cut" }]);
+    expect(textOf(state, state.cutId)).toBe("A");
+    expect(state.note).toBe(before.note);
+  });
+
+  it("moves the cut node with its subtree under the selected target, selects it and clears the mark", () => {
+    const cut = run(selecting(open(TREE), "A"), [{ type: "cut" }]);
+    const state = run(selecting(cut, "B"), [{ type: "paste" }]);
+    expect(serializeNote(state.note)).toBe(`# 命令
+
+- [事件 2026-09-30 09:00] 根
+  - [事件 2026-09-30 11:00] B
+    - [事件 2026-09-30 10:00] A
+      - [事件 2026-09-30 10:10] A1
+`);
+    expect(textOf(state, state.selectedId)).toBe("A");
+    expect(state.cutId).toBeNull();
+  });
+
+  it("can move a node up to an ancestor", () => {
+    const cut = run(selecting(open(TREE), "A1"), [{ type: "cut" }]);
+    const state = run(selecting(cut, "根"), [{ type: "paste" }]);
+    expect(serializeNote(state.note)).toBe(`# 命令
+
+- [事件 2026-09-30 09:00] 根
+  - [事件 2026-09-30 10:00] A
+  - [事件 2026-09-30 11:00] B
+  - [事件 2026-09-30 10:10] A1
+`);
+  });
+
+  it("pressing x again on the cut node cancels the cut", () => {
+    const state = run(selecting(open(TREE), "A"), [{ type: "cut" }, { type: "cut" }]);
+    expect(state.cutId).toBeNull();
+  });
+
+  it("refuses to cut the root", () => {
+    const before = open(TREE);
+    expect(commandError(before, { type: "cut" })).toBe("根结点不能剪切");
+    expect(applyCommand(before, { type: "cut" })).toBe(before);
+  });
+
+  it("refuses to paste a node into itself or its own subtree", () => {
+    const cut = run(selecting(open(TREE), "A"), [{ type: "cut" }]);
+    for (const target of ["A", "A1"]) {
+      const before = selecting(cut, target);
+      expect(commandError(before, { type: "paste" })).toBe("不能粘贴到被剪切的结点自己或它的子树里");
+      expect(applyCommand(before, { type: "paste" })).toBe(before);
+    }
+  });
+
+  it("pasting under the node's current parent leaves the note unchanged", () => {
+    const cut = run(selecting(open(TREE), "A"), [{ type: "cut" }]);
+    const state = run(selecting(cut, "根"), [{ type: "paste" }]);
+    expect(state.note).toBe(cut.note);
+    expect(state.cutId).toBeNull();
+  });
+
+  it("does nothing when nothing is cut", () => {
+    const before = selecting(open(TREE), "B");
+    expect(commandError(before, { type: "paste" })).toBeNull();
+    expect(applyCommand(before, { type: "paste" })).toBe(before);
+  });
+
+  it("forgets the cut when the cut node is deleted", () => {
+    const state = run(selecting(open(TREE), "A1"), [{ type: "cut" }]);
+    const deleted = run(selecting(state, "A"), [{ type: "deleteSubtree" }]);
+    expect(deleted.cutId).toBeNull();
+  });
+});
+
+describe("undo (Ctrl+Z)", () => {
+  const UNDO: Command = { type: "undo" };
+
+  it("restores a deleted subtree and selects the deleted node again", () => {
+    const state = run(selecting(open(TREE), "A"), [{ type: "deleteSubtree" }, UNDO]);
+    expect(serializeNote(state.note)).toBe(TREE);
+    expect(textOf(state, state.selectedId)).toBe("A");
+  });
+
+  it("moves a pasted node back where it was", () => {
+    const cut = run(selecting(open(TREE), "A"), [{ type: "cut" }]);
+    const state = run(selecting(cut, "B"), [{ type: "paste" }, UNDO]);
+    expect(serializeNote(state.note)).toBe(TREE);
+    expect(textOf(state, state.selectedId)).toBe("B");
+  });
+
+  it("removes a new node together with the text typed into it in one step", () => {
+    const state = run(selecting(open(TREE), "B"), [
+      { type: "addChild", time: NOW },
+      { type: "setText", text: "C" },
+      { type: "setText", text: "C1" },
+      { type: "commitEdit" },
+      UNDO,
+    ]);
+    expect(serializeNote(state.note)).toBe(TREE);
+    expect(textOf(state, state.selectedId)).toBe("B");
+  });
+
+  it("restores the text from before an edit in one step", () => {
+    const state = run(selecting(open(TREE), "B"), [
+      { type: "startEdit" },
+      { type: "setText", text: "B'" },
+      { type: "setText", text: "B''" },
+      { type: "commitEdit" },
+      UNDO,
+    ]);
+    expect(serializeNote(state.note)).toBe(TREE);
+    expect(textOf(state, state.selectedId)).toBe("B");
+  });
+
+  it("brings back a leaf that was deleted by committing it empty", () => {
+    const state = run(selecting(open(TREE), "B"), [
+      { type: "startEdit" },
+      { type: "setText", text: "" },
+      { type: "commitEdit" },
+      UNDO,
+    ]);
+    expect(serializeNote(state.note)).toBe(TREE);
+    expect(textOf(state, state.selectedId)).toBe("B");
+  });
+
+  it("does not record steps that leave the note unchanged", () => {
+    const deleted = run(selecting(open(TREE), "B"), [{ type: "deleteSubtree" }]);
+    const state = run(selecting(deleted, "A"), [
+      // 新建后什么都没写：结点被丢弃
+      { type: "addChild", time: NOW },
+      { type: "commitEdit" },
+      // 改了又改回原样
+      { type: "startEdit" },
+      { type: "setText", text: "A'" },
+      { type: "setText", text: "A" },
+      { type: "commitEdit" },
+      // 剪切标记不改变笔记
+      { type: "cut" },
+      { type: "cut" },
+      UNDO,
+    ]);
+    expect(serializeNote(state.note)).toBe(TREE);
+  });
+
+  it("undoes several steps in reverse order", () => {
+    const cut = run(selecting(open(TREE), "A1"), [{ type: "cut" }]);
+    let state = run(selecting(cut, "B"), [
+      { type: "paste" },
+      { type: "addChild", time: NOW },
+      { type: "setText", text: "C" },
+      { type: "commitEdit" },
+    ]);
+    state = run(selecting(state, "A"), [{ type: "deleteSubtree" }]);
+    expect(serializeNote(state.note)).toBe(`# 命令
+
+- [事件 2026-09-30 09:00] 根
+  - [事件 2026-09-30 11:00] B
+    - [事件 2026-09-30 10:10] A1
+      - [事件 2026-10-01 12:00] C
+`);
+
+    state = run(state, [UNDO]);
+    expect(serializeNote(state.note)).toBe(`# 命令
+
+- [事件 2026-09-30 09:00] 根
+  - [事件 2026-09-30 10:00] A
+  - [事件 2026-09-30 11:00] B
+    - [事件 2026-09-30 10:10] A1
+      - [事件 2026-10-01 12:00] C
+`);
+    state = run(state, [UNDO]);
+    expect(serializeNote(state.note)).toBe(`# 命令
+
+- [事件 2026-09-30 09:00] 根
+  - [事件 2026-09-30 10:00] A
+  - [事件 2026-09-30 11:00] B
+    - [事件 2026-09-30 10:10] A1
+`);
+    state = run(state, [UNDO]);
+    expect(serializeNote(state.note)).toBe(TREE);
+    expect(run(state, [UNDO])).toBe(state);
+  });
+
+  it("does nothing when there is nothing to undo", () => {
+    const before = open(TREE);
+    expect(applyCommand(before, UNDO)).toBe(before);
+  });
+
+  it("is ignored while editing, so the text box keeps its own undo", () => {
+    const editing = run(selecting(open(TREE), "B"), [
+      { type: "deleteSubtree" },
+      { type: "startEdit" },
+      { type: "setText", text: "根'" },
+    ]);
+    expect(applyCommand(editing, UNDO)).toBe(editing);
+  });
+
+  it("keeps the cut mark when the cut node survives the undo", () => {
+    const state = run(selecting(open(TREE), "B"), [{ type: "deleteSubtree" }]);
+    const undone = run(selecting(state, "A"), [{ type: "cut" }, UNDO]);
+    expect(textOf(undone, undone.cutId)).toBe("A");
+  });
+
+  it("drops the cut mark when the undo removes the cut node", () => {
+    const state = run(selecting(open(TREE), "B"), [
+      { type: "addChild", time: NOW },
+      { type: "setText", text: "C" },
+      { type: "commitEdit" },
+      { type: "cut" },
+      UNDO,
+    ]);
+    expect(state.cutId).toBeNull();
+  });
+
+  it("keeps the root of a new note that is undone back to empty", () => {
+    const state = run(newNoteState("新笔记", NOW), [{ type: "setText", text: "开始" }, { type: "commitEdit" }, UNDO]);
+    expect(serializeNote(state.note)).toBe(`# 新笔记
+
+- [事件 2026-10-01 12:00]
+`);
+    expect(state.selectedId).toBe(state.note.root.id);
   });
 });

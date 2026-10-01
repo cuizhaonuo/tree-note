@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { expand, hiddenCount, toggleCollapsed } from "./collapse";
+import { expand, hiddenCount, reveal, toggleCollapsed } from "./collapse";
 import { parseNote } from "./format";
 import { findNode, type TreeNode } from "./note";
 
@@ -68,5 +68,20 @@ describe("hiddenCount", () => {
     expect(hiddenCount(nodeOf(root, "A"))).toBe(3);
     expect(hiddenCount(root)).toBe(5);
     expect(hiddenCount(nodeOf(root, "B"))).toBe(0);
+  });
+});
+
+describe("reveal", () => {
+  it("expands every collapsed ancestor of the node, and nothing else", () => {
+    const root = parseTree(TREE);
+    const [a, a1, b] = ["A", "A1", "B"].map((t) => nodeOf(root, t).id);
+    const revealed = reveal(new Set([a, a1, b]), root, nodeOf(root, "A1a").id);
+    expect([...revealed]).toEqual([b]);
+  });
+
+  it("returns the same set when the node is already visible", () => {
+    const root = parseTree(TREE);
+    const collapsed = new Set([nodeOf(root, "A1").id]);
+    expect(reveal(collapsed, root, nodeOf(root, "A1").id)).toBe(collapsed);
   });
 });

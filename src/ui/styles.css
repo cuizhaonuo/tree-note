@@ -115,6 +115,18 @@ button { font: inherit; color: inherit; }
 .node.collapsed.selected {
   box-shadow: 0 0 0 3px var(--selected), 6px 6px 0 1px var(--border);
 }
+/* 被剪切的结点变淡，并带一个“已剪切”标记，直到粘贴或再按一次 x。 */
+.node.cut {
+  opacity: 0.55;
+  border-style: dotted;
+}
+.node-cut-badge {
+  padding: 0 6px;
+  border-radius: 9px;
+  background: var(--selected);
+  color: var(--panel);
+  font-size: 11px;
+}
 .node-hidden-count {
   margin-left: auto;
   padding: 0 6px;
@@ -194,4 +206,27 @@ button { font: inherit; color: inherit; }
   background: var(--bg);
   font: inherit;
   color: inherit;
+}
+.dialog p { margin: 0; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.dialog-actions button {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  cursor: pointer;
+}
+.dialog-actions button.danger { border-color: var(--error); background: var(--error); color: var(--panel); }
+
+.hint {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 14px;
+  border-radius: 6px;
+  background: var(--text);
+  color: var(--bg);
+  font-size: 13px;
+  pointer-events: none;
 }

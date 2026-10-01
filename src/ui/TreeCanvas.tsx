@@ -3,17 +3,18 @@
 // 选择状态：方向键移动选中状态，Enter / Shift+Enter 新建子结点 / 兄弟结点，F2 或双击编辑。
 // 编辑状态：Enter 或 Esc 确认，Shift+Enter 换行。
 // 空格折叠或展开选中结点的子树，折叠状态只保存在内存里。
+// Delete 确认后删除子树；x 标记剪切，v 粘贴为选中结点的子结点；Ctrl+Z 撤销。被拒绝的操作给出提示。
 // 画布用 d3-zoom 缩放（滚轮）和平移（拖动），选中的结点会移动到视野中央。
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { select } from "d3-selection";
 import "d3-transition";
 import { zoom, zoomIdentity, type ZoomBehavior } from "d3-zoom";
-import { expand, hiddenCount, toggleCollapsed } from "../core/collapse";
-import { applyCommand, type Command, type EditorState } from "../core/commands";
+import { expand, hiddenCount, reveal, toggleCollapsed } from "../core/collapse";
+import { applyCommand, commandError, type Command, type EditorState } from "../core/commands";
 import { layoutTree, type LayoutOptions, type NodeBox } from "../core/layout";
 import { navigate, type Direction } from "../core/navigation";
-import { findNode, formatNodeTime, type Note } from "../core/note";
+import { findNode, formatNodeTime, type Note, type TreeNode } from "../core/note";
 import { InlineMarkdown } from "./InlineMarkdown";
 
 const LAYOUT: LayoutOptions = {
@@ -25,6 +26,7 @@ const LAYOUT: LayoutOptions = {
 /** 打开笔记时根结点离视野顶部的距离。 */
 const TOP_MARGIN = 24;
 const SCALE_EXTENT: [number, number] = [0.1, 2];
+const HINT_MS = 2500;
 
 const ARROW_KEYS: Record<string, Direction> = {
   ArrowUp: "up",
@@ -47,6 +49,20 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
   const { note } = state;
   const dispatch = useCallback((command: Command) => setState((s) => applyCommand(s, command)), []);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [hint, setHint] = useState<{ text: string } | null>(null);
+
+  // 每次提示都是新对象，同一句提示连续出现时也会重新计时。
+  useEffect(() => {
+    if (!hint) return;
+    const timer = setTimeout(() => setHint(null), HINT_MS);
+    return () => clearTimeout(timer);
+  }, [hint]);
+
+  // 撤销或粘贴后选中的结点可能藏在被折叠的子树里，展开它的祖先。
+  useEffect(() => {
+    setCollapsed((c) => reveal(c, note.root, state.selectedId));
+  }, [note, state.selectedId]);
 
   const layout = useMemo(() => layoutTree(note.root, heights, LAYOUT, collapsed), [note, heights, collapsed]);
 
@@ -75,15 +91,33 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
     };
   }, []);
 
+  // 和上一次的内容比，而不是和打开时比：撤销回打开时的内容也要保存。
+  const lastNote = useRef(initialState.note);
   useEffect(() => {
-    if (note !== initialState.note) onNoteChange(note);
-  }, [note, initialState.note, onNoteChange]);
+    if (note === lastNote.current) return;
+    lastNote.current = note;
+    onNoteChange(note);
+  }, [note, onNoteChange]);
+
+  const selected = findNode(note.root, (n) => n.id === state.selectedId);
 
   useEffect(() => {
-    if (state.editingId !== null) return;
+    if (state.editingId !== null || confirmingDelete) return;
+    /** 被规则拒绝的命令只给出提示。 */
+    function attempt(command: Command) {
+      const error = commandError(state, command);
+      if (error) setHint({ text: error });
+      else dispatch(command);
+    }
     function onKeyDown(e: KeyboardEvent) {
       // 编辑框里确认用的 Enter 会继续冒泡到这里，它已经被处理过了（defaultPrevented），不能再新建结点。
-      if (e.defaultPrevented || isTextInput(e.target) || e.altKey || e.ctrlKey || e.metaKey) return;
+      if (e.defaultPrevented || isTextInput(e.target)) return;
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        dispatch({ type: "undo" });
+        return;
+      }
+      if (e.altKey || e.ctrlKey || e.metaKey) return;
       const direction = ARROW_KEYS[e.key];
       if (direction && !e.shiftKey) {
         e.preventDefault();
@@ -94,7 +128,6 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
       if (e.repeat) return;
       if (e.key === " " && !e.shiftKey) {
         e.preventDefault();
-        const selected = findNode(note.root, (n) => n.id === state.selectedId);
         if (selected) setCollapsed((c) => toggleCollapsed(c, selected));
       } else if (e.key === "Enter") {
         e.preventDefault();
@@ -105,11 +138,19 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
       } else if (e.key === "F2" && !e.shiftKey) {
         e.preventDefault();
         dispatch({ type: "startEdit" });
+      } else if (e.key === "Delete" && !e.shiftKey) {
+        e.preventDefault();
+        const error = commandError(state, { type: "deleteSubtree" });
+        if (error) setHint({ text: error });
+        else setConfirmingDelete(true);
+      } else if (e.key === "x" || e.key === "v") {
+        e.preventDefault();
+        attempt({ type: e.key === "x" ? "cut" : "paste" });
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [note, layout, collapsed, state.selectedId, state.editingId, dispatch]);
+  }, [state, selected, layout, collapsed, confirmingDelete, dispatch]);
 
   // 只在选中结点变化或折叠/展开时居中，其他重新布局不会把用户手动拖开的视野拉回来。
   // 新出现的结点要等测量出真实高度后再居中，否则多行结点会偏。
@@ -160,7 +201,7 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
                   if (el) nodeEls.current.set(box.node.id, el);
                   else nodeEls.current.delete(box.node.id);
                 }}
-                className={`node node-${box.node.kind}${box.node.id === state.selectedId ? " selected" : ""}${isCollapsed ? " collapsed" : ""}`}
+                className={`node node-${box.node.kind}${box.node.id === state.selectedId ? " selected" : ""}${isCollapsed ? " collapsed" : ""}${box.node.id === state.cutId ? " cut" : ""}`}
                 aria-current={box.node.id === state.selectedId || undefined}
                 aria-expanded={box.node.children.length > 0 ? !isCollapsed : undefined}
                 style={{ left: box.x, top: box.y, width: box.width }}
@@ -171,6 +212,11 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
                   <time dateTime={box.node.time.replace(" ", "T")} title={box.node.time}>
                     {box.node.time.slice(11)}
                   </time>
+                  {box.node.id === state.cutId && (
+                    <span className="node-cut-badge" title="已剪切，到目标结点按 v 粘贴">
+                      ✂ 已剪切
+                    </span>
+                  )}
                   {isCollapsed && (
                     <span className="node-hidden-count" title="已折叠，按空格展开">
                       +{hiddenCount(box.node)}
@@ -191,6 +237,51 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
               </div>
             );
           })}
+        </div>
+      </div>
+      {hint && (
+        <div className="hint" role="status">
+          {hint.text}
+        </div>
+      )}
+      {confirmingDelete && selected && (
+        <ConfirmDelete
+          node={selected}
+          onConfirm={() => {
+            setConfirmingDelete(false);
+            dispatch({ type: "deleteSubtree" });
+          }}
+          onCancel={() => setConfirmingDelete(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function ConfirmDelete({ node, onConfirm, onCancel }: { node: TreeNode; onConfirm: () => void; onCancel: () => void }) {
+  const descendants = hiddenCount(node);
+  const name = node.text.split("\n")[0] || "（空结点）";
+  return (
+    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
+      <div
+        className="dialog"
+        role="alertdialog"
+        aria-labelledby="confirm-delete-message"
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
+          }
+        }}
+      >
+        <p id="confirm-delete-message">
+          删除“{name}”{descendants > 0 && `及其下面的 ${descendants} 个结点`}？可以用 Ctrl+Z 撤销。
+        </p>
+        <div className="dialog-actions">
+          <button onClick={onCancel}>取消</button>
+          <button className="danger" autoFocus onClick={onConfirm}>
+            删除
+          </button>
         </div>
       </div>
     </div>
