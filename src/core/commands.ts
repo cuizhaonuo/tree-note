@@ -203,7 +203,8 @@ function setText(state: EditorState, id: string, text: string): EditorState {
 }
 
 function updateSelected(state: EditorState, update: (node: TreeNode) => TreeNode): EditorState {
-  return { ...state, note: { ...state.note, root: updateNode(state.note.root, state.selectedId, update) } };
+  const root = updateNode(state.note.root, state.selectedId, update);
+  return root === state.note.root ? state : { ...state, note: { ...state.note, root } };
 }
 
 function deleteSubtree(state: EditorState, id: string): EditorState {

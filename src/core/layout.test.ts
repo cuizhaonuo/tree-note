@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { applyCommand, initialEditorState } from "./commands";
 import { parseNote } from "./format";
 import { layoutTree, type LayoutOptions } from "./layout";
 import { findNode, type TreeNode } from "./note";
@@ -93,5 +94,18 @@ describe("layoutTree sibling order", () => {
   - [事件 2026-09-30 09:30] 丙
 `);
     expect(rows(root)[1]).toEqual(["丙", "甲", "乙"]);
+  });
+});
+
+describe("layoutTree after setTime", () => {
+  it("moves a node to its new place among its siblings", () => {
+    const parsed = parseNote(TREE);
+    if (!parsed.ok) throw new Error(parsed.error.message);
+    let state = initialEditorState(parsed.note);
+    state = { ...state, selectedId: idOf(state.note.root, "A") };
+    state = applyCommand(state, { type: "setTime", time: "2026-09-30 12:00" });
+    const { boxes } = layoutTree(state.note.root, new Map(), OPTIONS, new Set());
+    const row = boxes.filter((b) => b.depth === 1).sort((a, b) => a.x - b.x);
+    expect(row.map((b) => b.node.text)).toEqual(["B", "A"]);
   });
 });

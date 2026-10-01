@@ -47,6 +47,16 @@ export function formatNodeTime(date: Date): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+/** 结点时间的日期部分 `YYYY-MM-DD`。 */
+export function nodeDate(time: string): string {
+  return time.slice(0, 10);
+}
+
+/** 结点时间的时刻部分 `HH:MM`。 */
+export function nodeClock(time: string): string {
+  return time.slice(11);
+}
+
 /** `time` 是否是格式为 `YYYY-MM-DD HH:MM`、并且真实存在的日期和时间。 */
 export function isValidNodeTime(time: string): boolean {
   const match = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/.exec(time);

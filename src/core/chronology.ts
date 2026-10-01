@@ -3,15 +3,11 @@
 // 兄弟结点的顺序不单独存储，由时间决定；文件里的顺序只用来打破时间相同的平局。
 // 时间格式 `YYYY-MM-DD HH:MM` 按字符串比较即按时间比较。
 
-import type { TreeNode } from "./note";
+import { nodeDate, type TreeNode } from "./note";
 
 /** 子结点按时间从早到晚排列；时间相同时保持文件里的顺序。 */
 export function sortedChildren(node: TreeNode): TreeNode[] {
-  return [...node.children].sort((a, b) => compareTime(a.time, b.time));
-}
-
-function compareTime(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
+  return [...node.children].sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
 }
 
 /**
@@ -21,7 +17,7 @@ function compareTime(a: string, b: string): number {
 export function dayMarkers(root: TreeNode): ReadonlySet<string> {
   const firstOfDay = new Map<string, TreeNode>();
   const visit = (node: TreeNode) => {
-    const day = node.time.slice(0, 10);
+    const day = nodeDate(node.time);
     const first = firstOfDay.get(day);
     if (!first || node.time < first.time) firstOfDay.set(day, node);
     sortedChildren(node).forEach(visit);

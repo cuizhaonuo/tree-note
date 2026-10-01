@@ -26,7 +26,7 @@ import { expand, hiddenCount, reveal, toggleCollapsed } from "../core/collapse";
 import { applyCommand, commandError, type Command, type EditorState } from "../core/commands";
 import { layoutTree, type LayoutOptions, type NodeBox } from "../core/layout";
 import { navigate, type Direction } from "../core/navigation";
-import { findNode, formatNodeTime, type Note, type TreeNode } from "../core/note";
+import { findNode, formatNodeTime, nodeClock, nodeDate, type Note, type TreeNode } from "../core/note";
 import { InlineMarkdown } from "./InlineMarkdown";
 
 const LAYOUT: LayoutOptions = {
@@ -78,8 +78,8 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
   }, [note, state.selectedId]);
 
   const layout = useMemo(() => layoutTree(note.root, heights, LAYOUT, collapsed), [note, heights, collapsed]);
-  const dated = useMemo(() => dayMarkers(note.root), [note]);
-  const tooEarly = useMemo(() => timeViolations(note.root), [note]);
+  const dayMarkerIds = useMemo(() => dayMarkers(note.root), [note]);
+  const tooEarlyIds = useMemo(() => timeViolations(note.root), [note]);
 
   const viewportEl = useRef<HTMLDivElement>(null);
   const treeEl = useRef<HTMLDivElement>(null);
@@ -116,14 +116,18 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
 
   const selected = findNode(note.root, (n) => n.id === state.selectedId);
 
-  useEffect(() => {
-    if (state.editingId !== null || confirmingDelete || editingTime) return;
-    /** 被规则拒绝的命令只给出提示；允许时执行 `proceed`，默认直接执行命令。 */
-    function attempt(command: Command, proceed = () => dispatch(command)) {
+  /** 被规则拒绝的命令只给出提示；允许时执行 `proceed`，默认直接执行命令。 */
+  const attempt = useCallback(
+    (command: Command, proceed = () => dispatch(command)) => {
       const error = commandError(state, command);
       if (error) setHint({ text: error });
       else proceed();
-    }
+    },
+    [state, dispatch],
+  );
+
+  useEffect(() => {
+    if (state.editingId !== null || confirmingDelete || editingTime) return;
     function onKeyDown(e: KeyboardEvent) {
       // 编辑框里确认用的 Enter 会继续冒泡到这里，它已经被处理过了（defaultPrevented），不能再新建结点。
       if (e.defaultPrevented || isTextInput(e.target)) return;
@@ -169,7 +173,7 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [state, selected, layout, collapsed, confirmingDelete, editingTime, dispatch]);
+  }, [state, selected, layout, collapsed, confirmingDelete, editingTime, dispatch, attempt]);
 
   // 只在选中结点变化、折叠/展开、或选中结点的时间被修改（兄弟顺序可能变了）时居中，
   // 其他重新布局不会把用户手动拖开的视野拉回来。
@@ -216,7 +220,7 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
           </svg>
           {layout.boxes.map((box) => {
             const isCollapsed = collapsed.has(box.node.id);
-            const isTooEarly = tooEarly.has(box.node.id);
+            const isTooEarly = tooEarlyIds.has(box.node.id);
             return (
               <div
                 key={box.node.id}
@@ -236,7 +240,7 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
                     dateTime={box.node.time.replace(" ", "T")}
                     title={isTooEarly ? `${box.node.time}：早于父结点` : box.node.time}
                   >
-                    {dated.has(box.node.id) ? box.node.time : box.node.time.slice(11)}
+                    {dayMarkerIds.has(box.node.id) ? box.node.time : nodeClock(box.node.time)}
                   </time>
                   {box.node.id === state.cutId && (
                     <span className="node-cut-badge" title="已剪切，到目标结点按 v 粘贴">
@@ -275,10 +279,7 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
           time={selected.time}
           onConfirm={(time) => {
             setEditingTime(false);
-            const command: Command = { type: "setTime", time };
-            const error = commandError(state, command);
-            if (error) setHint({ text: error });
-            else dispatch(command);
+            attempt({ type: "setTime", time });
           }}
           onCancel={() => setEditingTime(false)}
         />
@@ -337,8 +338,8 @@ function TimeDialog({
   onConfirm: (time: string) => void;
   onCancel: () => void;
 }) {
-  const [date, setDate] = useState(time.slice(0, 10));
-  const [clock, setClock] = useState(time.slice(11));
+  const [date, setDate] = useState(nodeDate(time));
+  const [clock, setClock] = useState(nodeClock(time));
 
   function submit(e: FormEvent) {
     e.preventDefault();
