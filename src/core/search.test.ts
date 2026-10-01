@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseNote } from "./format";
 import type { Note } from "./note";
-import { nodeAtPath, searchNotes, type SearchHit } from "./search";
+import { locateHit, searchNotes, type SearchHit } from "./search";
 
 function parse(md: string): Note {
   const result = parseNote(md);
@@ -55,12 +55,25 @@ describe("searchNotes", () => {
 `;
     const hits = searchNotes([{ file: "乱序.md", note: parse(source) }], "目标");
     const reopened = parse(source).root;
-    expect(hits.map((h) => nodeAtPath(reopened, h.path)?.text)).toEqual(["目标 B1", "目标 A1"]);
+    expect(hits.map((h) => locateHit(reopened, h)?.text)).toEqual(["目标 B1", "目标 A1"]);
   });
 
-  it("finds nothing at a path that no longer exists", () => {
-    expect(nodeAtPath(wheat.root, [5])).toBeUndefined();
-    expect(nodeAtPath(wheat.root, [0, 0])).toBeUndefined();
+  it("does not locate a hit whose node has gone, even when another node now sits at its place", () => {
+    const note = parse(`# 三个
+
+- [事件 2026-09-30 09:00] 根
+  - [事件 2026-09-30 10:00] 甲
+  - [事件 2026-09-30 11:00] 乙 目标
+  - [事件 2026-09-30 12:00] 丙 目标
+`);
+    const [hit] = searchNotes([{ file: "三个.md", note }], "目标");
+    expect(locateHit(note.root, hit)?.text).toBe("乙 目标");
+
+    // 删掉排在它前面的“甲”：原来的位置上现在是“丙”。
+    const shifted = { ...note.root, children: note.root.children.slice(1) };
+    expect(locateHit(shifted, hit)).toBeUndefined();
+    // 只剩“甲”：路径已经不存在。
+    expect(locateHit({ ...note.root, children: note.root.children.slice(0, 1) }, hit)).toBeUndefined();
   });
 
   it("finds a note by its title, pointing at the root, before the note's matching nodes", () => {

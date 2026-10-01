@@ -5,7 +5,8 @@
 // 结果按笔记的先后排列；同一篇笔记里标题在前，结点按树上的顺序（先父后子，兄弟按时间）。
 //
 // 结点 id 每次解析都重新生成，所以结果用路径（从根往下每一层在文件里的下标）指明结点，
-// 重新打开文件后用 nodeAtPath 找回它。
+// 重新打开文件后用 locateHit 找回它。搜索之后笔记可能又改过，路径上已经换成别的结点，
+// 所以还要核对时间和文本，对不上就当作找不到。
 
 import { sortedChildren } from "./chronology";
 import type { Note, TreeNode } from "./note";
@@ -27,15 +28,21 @@ export interface SnippetPart {
   match: boolean;
 }
 
-export interface SearchHit {
+/** 从根到某个结点，每一层在父结点 children 里的下标（文件里的顺序）；根结点是空数组。 */
+export type NodePath = readonly number[];
+
+/** 搜索结果指向的结点：位置，加上搜索时它的时间和文本，用来确认它还是那个结点。 */
+export interface NodeLocator {
+  path: NodePath;
+  time: string;
+  text: string;
+}
+
+export interface SearchHit extends NodeLocator {
   file: string;
   title: string;
   /** 匹配的是标题而不是结点：这时结果指向根结点，片段是标题。 */
   inTitle: boolean;
-  /** 匹配结点的时间。 */
-  time: string;
-  /** 从根到匹配结点，每一层在父结点 children 里的下标；根结点是空数组。 */
-  path: number[];
   snippet: SnippetPart[];
 }
 
@@ -46,12 +53,14 @@ export function searchNotes(notes: readonly SearchableNote[], query: string): Se
   for (const { file, note } of notes) {
     const titleSnippet = matcher(note.title);
     if (titleSnippet) {
-      hits.push({ file, title: note.title, inTitle: true, time: note.root.time, path: [], snippet: titleSnippet });
+      const { time, text } = note.root;
+      hits.push({ file, title: note.title, inTitle: true, path: [], time, text, snippet: titleSnippet });
     }
-    const visit = (node: TreeNode, path: number[]) => {
+    const visit = (node: TreeNode, path: NodePath) => {
       const snippet = matcher(node.text);
-      if (snippet) hits.push({ file, title: note.title, inTitle: false, time: node.time, path, snippet });
-      for (const child of sortedChildren(node)) visit(child, [...path, node.children.indexOf(child)]);
+      if (snippet) hits.push({ file, title: note.title, inTitle: false, path, time: node.time, text: node.text, snippet });
+      const indices = new Map(node.children.map((child, index) => [child, index]));
+      for (const child of sortedChildren(node)) visit(child, [...path, indices.get(child)!]);
     };
     visit(note.root, []);
   }
@@ -66,14 +75,14 @@ function keywordMatcher(query: string): Matcher | null {
   if (keywords.length === 0) return null;
   const patterns = keywords.map((k) => new RegExp(escapeRegExp(k), "iu"));
   // 长的关键词优先，这样一个关键词包含另一个时高亮整段。
-  const any = new RegExp(
+  const anyKeyword = new RegExp(
     [...keywords].sort((a, b) => b.length - a.length).map(escapeRegExp).join("|"),
     "giu",
   );
   return (text) => {
     if (!patterns.every((p) => p.test(text))) return null;
     const line = text.replaceAll("\n", " ");
-    const matches = [...line.matchAll(any)].map((m) => ({ start: m.index, end: m.index + m[0].length }));
+    const matches = [...line.matchAll(anyKeyword)].map((m) => ({ start: m.index, end: m.index + m[0].length }));
     const start = codePointBoundary(line, Math.max(0, matches[0].start - SNIPPET_BEFORE));
     const end = codePointBoundary(line, Math.min(line.length, start + SNIPPET_LENGTH));
 
@@ -109,9 +118,9 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** 按 SearchHit.path 找结点；文件改过、路径已经不存在时返回 undefined。 */
-export function nodeAtPath(root: TreeNode, path: readonly number[]): TreeNode | undefined {
+/** 找回搜索结果指向的结点；结点已经不在、或者那个位置上换成了别的结点时返回 undefined。 */
+export function locateHit(root: TreeNode, locator: NodeLocator): TreeNode | undefined {
   let node: TreeNode | undefined = root;
-  for (const index of path) node = node?.children[index];
-  return node;
+  for (const index of locator.path) node = node?.children[index];
+  return node && node.time === locator.time && node.text === locator.text ? node : undefined;
 }

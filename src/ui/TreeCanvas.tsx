@@ -28,7 +28,7 @@ import { expand, hiddenCount, reveal, toggleCollapsed } from "../core/collapse";
 import { applyCommand, commandError, type Command, type EditorState } from "../core/commands";
 import { layoutTree, type LayoutOptions, type NodeBox } from "../core/layout";
 import { navigate, selectNode, type Direction } from "../core/navigation";
-import { nodeAtPath } from "../core/search";
+import { locateHit, type NodeLocator } from "../core/search";
 import { findNode, formatNodeTime, nodeClock, nodeDate, type Note, type TreeNode } from "../core/note";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { InlineMarkdown } from "./InlineMarkdown";
@@ -53,8 +53,7 @@ const ARROW_KEYS: Record<string, Direction> = {
 
 /** 要求选中某个结点（打开搜索结果）。每次要求都是新对象，同一个结点也会再选中、居中一次。 */
 export interface FocusRequest {
-  /** 见 SearchHit.path。 */
-  path: number[];
+  target: NodeLocator;
 }
 
 interface TreeCanvasProps {
@@ -90,11 +89,11 @@ export function TreeCanvas({ initialState, focus, onNoteChange }: TreeCanvasProp
   }, [note, state.selectedId]);
 
   // 搜索结果指向的结点：先确认正在进行的编辑，再选中它；沿途的折叠由上面的 reveal 展开。
-  // 搜索之后笔记又被改过、结点已经不在了，就只给出提示。
+  // 搜索之后笔记又被改过、结点已经不在了（或那个位置上换成了别的结点），就只给出提示。
   // 只在收到新的要求时执行一次，所以依赖里只有 focus。
   useEffect(() => {
     if (!focus) return;
-    const node = nodeAtPath(state.note.root, focus.path);
+    const node = locateHit(state.note.root, focus.target);
     if (!node) {
       setHint({ text: "找不到这个结点，笔记在搜索之后被修改过，请重新搜索" });
       return;
