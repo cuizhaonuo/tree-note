@@ -5,25 +5,26 @@
 //
 // 标题变化时（重命名或撤销重命名）不直接写，而是在队列里排一次“改名”：按新标题换一个文件。
 // 改名前排队的写入写到旧文件，之后的写入写到新文件，所以写入时才去取当前的文件。
+// 改名失败时恢复原来的标题，下次保存时会再试一次。
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { serializeNote } from "../core/format";
 import type { Note } from "../core/note";
-import { writeNote } from "./vault";
+import { writeNote, type NoteFile } from "./vault";
 
 const DEBOUNCE_MS = 1000;
 
 export type SaveStatus = { kind: "saved" } | { kind: "pending" } | { kind: "error"; message: string };
 
-/** 打开的笔记写到哪个文件。改名后换成新文件，所以这个对象会被修改。 */
+/** 打开的笔记写到哪个文件。改名后这里换成新文件：只有自动保存会修改这个对象。 */
 export interface SaveTarget {
   handle: FileSystemFileHandle;
   /** 文件里现在的标题（包括已经排队、还没写完的改名）。 */
   title: string;
 }
 
-/** 把 `text` 写到按 `title` 命名的文件里，并把 `target.handle` 换成那个文件。 */
-export type Relocate = (target: SaveTarget, title: string, text: string) => Promise<void>;
+/** 把 `text` 写到按 `title` 命名的文件里（代替 `handle`），返回那个文件。 */
+export type Relocate = (handle: FileSystemFileHandle, title: string, text: string) => Promise<NoteFile>;
 
 let queue: Promise<void> = Promise.resolve();
 let unfinishedWrites = 0;
@@ -45,7 +46,7 @@ export function useAutosave(target: SaveTarget | null, relocate: Relocate, onSav
 
   useEffect(() => {
     if (!target) return;
-    const file = target;
+    const saving = target;
     let pending: string | null = null;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const isClean = () => pending === null && unfinishedWrites === 0;
@@ -72,18 +73,28 @@ export function useAutosave(target: SaveTarget | null, relocate: Relocate, onSav
       if (pending === null) return;
       const text = pending;
       pending = null;
-      enqueue(() => writeNote(file.handle, text));
+      enqueue(() => writeNote(saving.handle, text));
     }
 
     scheduleRef.current = (note) => {
       const text = serializeNote(note);
       setStatus({ kind: "pending" });
       clearTimeout(timer);
-      if (note.title !== file.title) {
+      if (note.title !== saving.title) {
         // 改名时把最新的内容一起写进新文件，还没写的改动就不用单独写了。
         pending = null;
-        file.title = note.title;
-        enqueue(() => relocateRef.current(file, note.title, text));
+        const { title } = note;
+        const previous = saving.title;
+        saving.title = title;
+        enqueue(async () => {
+          try {
+            saving.handle = (await relocateRef.current(saving.handle, title, text)).handle;
+          } catch (e) {
+            // 这之后又排了别的改名就不恢复，那次改名会再试。
+            if (saving.title === title) saving.title = previous;
+            throw e;
+          }
+        });
         return;
       }
       pending = text;

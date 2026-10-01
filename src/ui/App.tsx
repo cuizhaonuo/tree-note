@@ -3,6 +3,7 @@ import { initialEditorState, newNoteState, type EditorState } from "../core/comm
 import { parseNote, serializeNote, type ParseError } from "../core/format";
 import { formatNodeTime } from "../core/note";
 import { useAutosave, whenSaved, type Relocate, type SaveStatus, type SaveTarget } from "./autosave";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { TreeCanvas } from "./TreeCanvas";
 import {
   createNoteFile,
@@ -35,13 +36,15 @@ export function App() {
   const [askingTitle, setAskingTitle] = useState(false);
   const [deleting, setDeleting] = useState<NoteFile | null>(null);
 
-  // 标题变了：换成按新标题命名的文件。
+  // 标题变了：换成按新标题命名的文件。打开的笔记和列表立即换成新文件，不等刷新列表，
+  // 否则点到旧名字会去读、去删已经不存在的旧文件。
   const relocate: Relocate = useCallback(
-    async (target, title, text) => {
-      if (!vault) return;
-      const file = await renameNoteFile(vault, target.handle, title, text);
-      target.handle = file.handle;
-      setOpened((o) => (o.status === "ok" && o.target === target ? { ...o, file } : o));
+    async (handle, title, text) => {
+      if (!vault) throw new Error("没有打开笔记库");
+      const file = await renameNoteFile(vault, handle, title, text);
+      setOpened((o) => (o.status === "ok" && o.file.handle === handle ? { ...o, file } : o));
+      setFiles((fs) => fs.map((f) => (f.name === handle.name ? file : f)));
+      return file;
     },
     [vault],
   );
@@ -101,6 +104,8 @@ export function App() {
   }
 
   async function openFile(file: NoteFile) {
+    // 已经打开的笔记不重新读：内存里的内容才是最新的，改名还没写完时旧文件也可能已经不在了。
+    if (opened.status === "ok" && file.name === opened.file.name) return;
     try {
       // 先等之前的改动写完，否则可能读到旧内容。
       await whenSaved();
@@ -125,13 +130,16 @@ export function App() {
     if (!vault) return;
     setDeleting(null);
     try {
-      if (file.name === openedName) {
+      const isOpened = file.name === openedName;
+      const target = isOpened && opened.status === "ok" ? opened.target : null;
+      if (isOpened) {
         autosave.discard();
         setOpened({ status: "none" });
       }
       // 等排队的写入完成，否则删掉以后又会被写出来。
       await whenSaved();
-      await deleteNoteFile(vault, file.name);
+      // 打开的笔记可能刚改过名，要删的是它现在的文件。
+      await deleteNoteFile(vault, target ? target.handle.name : file.name);
       setFiles(await listNotes(vault));
       setVaultError(null);
     } catch (e) {
@@ -179,7 +187,12 @@ export function App() {
         )}
         {askingTitle && <TitlePrompt onConfirm={createNote} onCancel={() => setAskingTitle(false)} />}
         {deleting && (
-          <ConfirmDeleteNote file={deleting} onConfirm={() => deleteNote(deleting)} onCancel={() => setDeleting(null)} />
+          <ConfirmDialog
+            message={`删除笔记“${noteName(deleting)}”？文件 ${deleting.name} 会被删除，不能撤销。`}
+            confirmLabel="删除"
+            onConfirm={() => deleteNote(deleting)}
+            onCancel={() => setDeleting(null)}
+          />
         )}
       </main>
     </div>
@@ -208,34 +221,6 @@ function TitlePrompt({ onConfirm, onCancel }: { onConfirm: (title: string) => vo
           placeholder="Enter 确认，Esc 取消"
         />
       </form>
-    </div>
-  );
-}
-
-function ConfirmDeleteNote({ file, onConfirm, onCancel }: { file: NoteFile; onConfirm: () => void; onCancel: () => void }) {
-  return (
-    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
-      <div
-        className="dialog"
-        role="alertdialog"
-        aria-labelledby="confirm-delete-note-message"
-        onKeyDown={(e) => {
-          // 打开着的画布在 window 上监听按键：在“删除”按钮上按 Enter 不能再新建结点。
-          e.stopPropagation();
-          if (e.key === "Escape") {
-            e.preventDefault();
-            onCancel();
-          }
-        }}
-      >
-        <p id="confirm-delete-note-message">删除笔记“{noteName(file)}”？文件 {file.name} 会被删除，不能撤销。</p>
-        <div className="dialog-actions">
-          <button onClick={onCancel}>取消</button>
-          <button className="danger" autoFocus onClick={onConfirm}>
-            删除
-          </button>
-        </div>
-      </div>
     </div>
   );
 }

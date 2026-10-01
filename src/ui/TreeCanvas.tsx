@@ -28,6 +28,7 @@ import { applyCommand, commandError, type Command, type EditorState } from "../c
 import { layoutTree, type LayoutOptions, type NodeBox } from "../core/layout";
 import { navigate, type Direction } from "../core/navigation";
 import { findNode, formatNodeTime, nodeClock, nodeDate, type Note, type TreeNode } from "../core/note";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { InlineMarkdown } from "./InlineMarkdown";
 
 const LAYOUT: LayoutOptions = {
@@ -314,8 +315,9 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
         />
       )}
       {confirmingDelete && selected && (
-        <ConfirmDelete
-          node={selected}
+        <ConfirmDialog
+          message={deleteMessage(selected)}
+          confirmLabel="删除"
           onConfirm={() => {
             setConfirmingDelete(false);
             dispatch({ type: "deleteSubtree" });
@@ -327,34 +329,11 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
   );
 }
 
-function ConfirmDelete({ node, onConfirm, onCancel }: { node: TreeNode; onConfirm: () => void; onCancel: () => void }) {
+/** 删除前确认的提示：结点第一行文字，以及会一起删除的结点数。 */
+function deleteMessage(node: TreeNode): string {
   const descendants = hiddenCount(node);
   const name = node.text.split("\n")[0] || "（空结点）";
-  return (
-    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
-      <div
-        className="dialog"
-        role="alertdialog"
-        aria-labelledby="confirm-delete-message"
-        onKeyDown={(e) => {
-          if (e.key === "Escape") {
-            e.preventDefault();
-            onCancel();
-          }
-        }}
-      >
-        <p id="confirm-delete-message">
-          删除“{name}”{descendants > 0 && `及其下面的 ${descendants} 个结点`}？可以用 Ctrl+Z 撤销。
-        </p>
-        <div className="dialog-actions">
-          <button onClick={onCancel}>取消</button>
-          <button className="danger" autoFocus onClick={onConfirm}>
-            删除
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+  return `删除“${name}”${descendants > 0 ? `及其下面的 ${descendants} 个结点` : ""}？可以用 Ctrl+Z 撤销。`;
 }
 
 /** 修改结点时间：日期和时间两个输入框，Enter 确认，Esc 取消。 */
