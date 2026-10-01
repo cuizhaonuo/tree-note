@@ -11,6 +11,7 @@
   --error: #cf222e;
   --code-bg: #eff1f3;
   --selected: #fb8500;
+  --mark: #fff3a3;
   font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   color: var(--text);
   background: var(--bg);
@@ -29,6 +30,7 @@
     --error: #ff7b72;
     --code-bg: #2d333b;
     --selected: #ffa94d;
+  --mark: #6b5a12;
   }
 }
 
@@ -86,6 +88,28 @@ button { font: inherit; color: inherit; }
 .note-list button.note-delete:hover { color: var(--error); }
 .note-name { font-size: 14px; }
 .note-date { font-size: 12px; color: var(--muted); }
+
+.search-input {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  font: inherit;
+  font-size: 14px;
+  color: inherit;
+}
+.search-count { font-size: 12px; color: var(--muted); }
+.search-hits .hit-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+}
+.search-hits .note-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-hits .note-date { flex: none; font-variant-numeric: tabular-nums; }
+.hit-snippet { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.search-hits mark { padding: 0 1px; border-radius: 2px; background: var(--mark); color: var(--text); }
 
 .main { flex: 1; overflow: auto; position: relative; }
 .empty, .notice { padding: 24px; color: var(--muted); }

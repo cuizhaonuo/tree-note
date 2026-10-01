@@ -8,6 +8,7 @@
 // Delete 确认后删除子树；x 标记剪切，v 粘贴为选中结点的子结点；Ctrl+Z 撤销。被拒绝的操作给出提示。
 // Ctrl+R 或点击标题修改标题（Enter 确认，Esc 取消）；文件随标题改名由保存负责。
 // 画布用 d3-zoom 缩放（滚轮）和平移（拖动），选中的结点会移动到视野中央。
+// 打开搜索结果时选中那个结点，展开沿途的折叠并居中。
 
 import {
   useCallback,
@@ -26,7 +27,8 @@ import { dayMarkers, timeViolations } from "../core/chronology";
 import { expand, hiddenCount, reveal, toggleCollapsed } from "../core/collapse";
 import { applyCommand, commandError, type Command, type EditorState } from "../core/commands";
 import { layoutTree, type LayoutOptions, type NodeBox } from "../core/layout";
-import { navigate, type Direction } from "../core/navigation";
+import { navigate, selectNode, type Direction } from "../core/navigation";
+import { nodeAtPath } from "../core/search";
 import { findNode, formatNodeTime, nodeClock, nodeDate, type Note, type TreeNode } from "../core/note";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { InlineMarkdown } from "./InlineMarkdown";
@@ -49,13 +51,20 @@ const ARROW_KEYS: Record<string, Direction> = {
   ArrowRight: "right",
 };
 
+/** 要求选中某个结点（打开搜索结果）。每次要求都是新对象，同一个结点也会再选中、居中一次。 */
+export interface FocusRequest {
+  /** 见 SearchHit.path。 */
+  path: number[];
+}
+
 interface TreeCanvasProps {
   initialState: EditorState;
+  focus?: FocusRequest;
   /** 笔记内容变化后调用（不包括打开时的初始内容）。 */
   onNoteChange: (note: Note) => void;
 }
 
-export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
+export function TreeCanvas({ initialState, focus, onNoteChange }: TreeCanvasProps) {
   const [heights, setHeights] = useState<ReadonlyMap<string, number>>(new Map());
   const nodeEls = useRef(new Map<string, HTMLDivElement>());
 
@@ -79,6 +88,22 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
   useEffect(() => {
     setCollapsed((c) => reveal(c, note.root, state.selectedId));
   }, [note, state.selectedId]);
+
+  // 搜索结果指向的结点：先确认正在进行的编辑，再选中它；沿途的折叠由上面的 reveal 展开。
+  // 搜索之后笔记又被改过、结点已经不在了，就只给出提示。
+  // 只在收到新的要求时执行一次，所以依赖里只有 focus。
+  useEffect(() => {
+    if (!focus) return;
+    const node = nodeAtPath(state.note.root, focus.path);
+    if (!node) {
+      setHint({ text: "找不到这个结点，笔记在搜索之后被修改过，请重新搜索" });
+      return;
+    }
+    setState((s) => {
+      const committed = s.editingId === null ? s : applyCommand(s, { type: "commitEdit" });
+      return { ...committed, ...selectNode(committed.note.root, committed, node.id) };
+    });
+  }, [focus]);
 
   const layout = useMemo(() => layoutTree(note.root, heights, LAYOUT, collapsed), [note, heights, collapsed]);
   const dayMarkerIds = useMemo(() => dayMarkers(note.root), [note]);
@@ -192,18 +217,23 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [state, selected, layout, collapsed, confirmingDelete, editingTime, editingTitle, dispatch, attempt]);
 
-  // 只在选中结点变化、折叠/展开、或选中结点的时间被修改（兄弟顺序可能变了）时居中，
+  // 只在选中结点变化、折叠/展开、选中结点的时间被修改（兄弟顺序可能变了）或打开搜索结果时居中，
   // 其他重新布局不会把用户手动拖开的视野拉回来。
   // 新出现的结点要等测量出真实高度后再居中，否则多行结点会偏。
   // 当前缩放比例保持不变，translateTo 按这个比例把结点中心移到视野中央。
   // 刚打开时选中的是根结点，它已经在视野顶部了，不需要居中。
   const selectedTime = selected?.time;
-  const lastCenteredFor = useRef({ selectedId: state.selectedId, collapsed, selectedTime });
+  const lastCenteredFor = useRef({ selectedId: state.selectedId, collapsed, selectedTime, focus: undefined as FocusRequest | undefined });
   const centerPending = useRef(false);
   useEffect(() => {
     const last = lastCenteredFor.current;
-    if (last.selectedId !== state.selectedId || last.collapsed !== collapsed || last.selectedTime !== selectedTime) {
-      lastCenteredFor.current = { selectedId: state.selectedId, collapsed, selectedTime };
+    if (
+      last.selectedId !== state.selectedId ||
+      last.collapsed !== collapsed ||
+      last.selectedTime !== selectedTime ||
+      last.focus !== focus
+    ) {
+      lastCenteredFor.current = { selectedId: state.selectedId, collapsed, selectedTime, focus };
       centerPending.current = true;
     }
     const box = layout.boxes.find((b) => b.node.id === state.selectedId);
@@ -213,7 +243,7 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
       .transition()
       .duration(250)
       .call(zoomBehavior.current.translateTo, box.x + box.width / 2, box.y + box.height / 2);
-  }, [state.selectedId, collapsed, selectedTime, layout, heights]);
+  }, [state.selectedId, collapsed, selectedTime, focus, layout, heights]);
 
   // 结点高度随文本行数变化：渲染后测量，高度有变化再重新布局。
   useLayoutEffect(() => {

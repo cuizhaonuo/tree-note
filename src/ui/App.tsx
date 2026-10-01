@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { initialEditorState, newNoteState, type EditorState } from "../core/commands";
 import { parseNote, serializeNote, type ParseError } from "../core/format";
-import { formatNodeTime } from "../core/note";
+import { formatNodeTime, type Note } from "../core/note";
 import { useAutosave, whenSaved, type Relocate, type SaveStatus, type SaveTarget } from "./autosave";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { TreeCanvas } from "./TreeCanvas";
+import { SearchResults, useVaultSearch } from "./search";
+import { TreeCanvas, type FocusRequest } from "./TreeCanvas";
 import {
   createNoteFile,
   deleteNoteFile,
@@ -18,8 +19,11 @@ import {
 
 type Opened =
   | { status: "none" }
-  /** 重命名后 `file` 换成新文件，`target` 和 `session` 不变，画布不会重新打开。 */
-  | { status: "ok"; file: NoteFile; state: EditorState; target: SaveTarget; session: number }
+  /**
+   * 重命名后 `file` 换成新文件，`target` 和 `session` 不变，画布不会重新打开。
+   * `focus` 是最近一次从搜索结果要求选中的结点。
+   */
+  | { status: "ok"; file: NoteFile; state: EditorState; target: SaveTarget; session: number; focus?: FocusRequest }
   | { status: "error"; file: NoteFile; error: ParseError | string };
 
 /** 每次打开笔记的编号，用作画布的 key：打开另一篇笔记时画布重新开始，重命名时不会。 */
@@ -35,6 +39,7 @@ export function App() {
   const [vaultError, setVaultError] = useState<string | null>(null);
   const [askingTitle, setAskingTitle] = useState(false);
   const [deleting, setDeleting] = useState<NoteFile | null>(null);
+  const [query, setQuery] = useState("");
 
   // 标题变了：换成按新标题命名的文件。打开的笔记和列表立即换成新文件，不等刷新列表，
   // 否则点到旧名字会去读、去删已经不存在的旧文件。
@@ -53,6 +58,25 @@ export function App() {
     if (vault) listNotes(vault).then(setFiles, (e: unknown) => setVaultError(`无法读取笔记列表：${String(e)}`));
   }, [vault]);
   const autosave = useAutosave(opened.status === "ok" ? opened.target : null, relocate, refreshFiles);
+
+  // 打开着的笔记在内存里的最新内容，搜索用它而不是可能还没写完的文件。
+  const edited = useRef<{ session: number; note: Note } | null>(null);
+  const openedRef = useRef(opened);
+  openedRef.current = opened;
+  const session = opened.status === "ok" ? opened.session : null;
+  const onNoteChange = useCallback(
+    (note: Note) => {
+      if (session !== null) edited.current = { session, note };
+      autosave.schedule(note);
+    },
+    [session, autosave.schedule],
+  );
+  const search = useVaultSearch(vault, query, () => {
+    const o = openedRef.current;
+    if (o.status !== "ok") return null;
+    const note = edited.current?.session === o.session ? edited.current.note : o.state.note;
+    return { file: o.target.handle.name, note };
+  });
 
   // Ctrl+N 新建笔记。注意：普通的 Chrome 标签页里浏览器会抢先处理 Ctrl+N（打开新窗口），
   // 只有把页面安装成应用窗口时才收得到，所以侧栏里另有一个“新建笔记”按钮。
@@ -103,9 +127,13 @@ export function App() {
     }
   }
 
-  async function openFile(file: NoteFile) {
+  /** 打开笔记；给了 `path`（搜索结果）时选中并居中那个结点。 */
+  async function openFile(file: NoteFile, path?: number[]) {
     // 已经打开的笔记不重新读：内存里的内容才是最新的，改名还没写完时旧文件也可能已经不在了。
-    if (opened.status === "ok" && file.name === opened.file.name) return;
+    if (opened.status === "ok" && file.name === opened.file.name) {
+      if (path) setOpened({ ...opened, focus: { path } });
+      return;
+    }
     try {
       // 先等之前的改动写完，否则可能读到旧内容。
       await whenSaved();
@@ -118,6 +146,7 @@ export function App() {
               state: initialEditorState(result.note),
               target: { handle: file.handle, title: result.note.title },
               session: nextSession(),
+              focus: path && { path },
             }
           : { status: "error", file, error: result.error },
       );
@@ -149,6 +178,12 @@ export function App() {
 
   const openedName = opened.status === "none" ? null : opened.file.name;
 
+  // 打开搜索结果后让出焦点，方向键等按键直接作用在树上。
+  function openHit(file: NoteFile, path: number[]) {
+    (document.activeElement as HTMLElement | null)?.blur();
+    openFile(file, path);
+  }
+
   return (
     <div className="app">
       <aside className="sidebar">
@@ -156,8 +191,32 @@ export function App() {
         {vault && <button onClick={() => setAskingTitle(true)}>新建笔记（Ctrl+N）</button>}
         {vault && <div className="vault-name">📁 {vault.name}</div>}
         {vaultError && <div className="error">{vaultError}</div>}
-        {vault && files.length === 0 && <div className="empty">这个文件夹里还没有笔记</div>}
-        <ul className="note-list">
+        {vault && (
+          <input
+            className="search-input"
+            type="search"
+            aria-label="搜索所有笔记"
+            placeholder="搜索所有笔记"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+              if (e.key === "Escape") {
+                e.preventDefault();
+                setQuery("");
+                e.currentTarget.blur();
+              } else if (e.key === "Enter" && search?.status === "done" && search.hits.length > 0) {
+                e.preventDefault();
+                const hit = search.hits[0];
+                const file = search.files.find((f) => f.name === hit.file);
+                if (file) openHit(file, hit.path);
+              }
+            }}
+          />
+        )}
+        {search && <SearchResults result={search} onOpen={(file, hit) => openHit(file, hit.path)} />}
+        {!search && vault && files.length === 0 && <div className="empty">这个文件夹里还没有笔记</div>}
+        <ul className="note-list" hidden={search !== null}>
           {files.map((file) => (
             <li key={file.name}>
               <button
@@ -182,7 +241,12 @@ export function App() {
         {opened.status === "ok" && (
           <>
             <SaveIndicator status={autosave.status} />
-            <TreeCanvas key={opened.session} initialState={opened.state} onNoteChange={autosave.schedule} />
+            <TreeCanvas
+              key={opened.session}
+              initialState={opened.state}
+              focus={opened.focus}
+              onNoteChange={onNoteChange}
+            />
           </>
         )}
         {askingTitle && <TitlePrompt onConfirm={createNote} onCancel={() => setAskingTitle(false)} />}
