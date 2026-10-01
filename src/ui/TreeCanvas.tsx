@@ -61,8 +61,9 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
       .scaleExtent(SCALE_EXTENT)
       // 编辑框里的拖动用来选择文字，不平移画布；滚轮照常缩放。
       .filter((e: Event) => defaultZoomFilter(e) && (e.type === "wheel" || !isTextInput(e.target)))
-      .on("zoom", ({ transform }) => {
-        treeEl.current!.style.transform = transform.toString();
+      .on("zoom", ({ transform: { x, y, k } }) => {
+        // 不能用 transform.toString()：它是不带单位的 SVG 写法，CSS 会当作无效值忽略。
+        treeEl.current!.style.transform = `translate(${x}px, ${y}px) scale(${k})`;
       });
     // 双击用来编辑结点，不缩放。
     select(viewport).call(behavior).on("dblclick.zoom", null);
