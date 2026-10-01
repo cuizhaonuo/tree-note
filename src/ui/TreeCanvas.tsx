@@ -103,11 +103,11 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
 
   useEffect(() => {
     if (state.editingId !== null || confirmingDelete) return;
-    /** 被规则拒绝的命令只给出提示。 */
-    function attempt(command: Command) {
+    /** 被规则拒绝的命令只给出提示；允许时执行 `proceed`，默认直接执行命令。 */
+    function attempt(command: Command, proceed = () => dispatch(command)) {
       const error = commandError(state, command);
       if (error) setHint({ text: error });
-      else dispatch(command);
+      else proceed();
     }
     function onKeyDown(e: KeyboardEvent) {
       // 编辑框里确认用的 Enter 会继续冒泡到这里，它已经被处理过了（defaultPrevented），不能再新建结点。
@@ -140,9 +140,7 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
         dispatch({ type: "startEdit" });
       } else if (e.key === "Delete" && !e.shiftKey) {
         e.preventDefault();
-        const error = commandError(state, { type: "deleteSubtree" });
-        if (error) setHint({ text: error });
-        else setConfirmingDelete(true);
+        attempt({ type: "deleteSubtree" }, () => setConfirmingDelete(true));
       } else if (e.key === "x" || e.key === "v") {
         e.preventDefault();
         attempt({ type: e.key === "x" ? "cut" : "paste" });

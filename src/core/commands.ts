@@ -72,7 +72,7 @@ export function newNoteState(title: string, time: string): EditorState {
  * applyCommand 对这些命令什么都不做，界面用这里的原因给出提示。
  */
 export function commandError(state: EditorState, command: Command): string | null {
-  if (state.editingId !== null && SELECTION_COMMANDS.has(command.type)) return null;
+  if (isIgnored(state, command)) return null;
   switch (command.type) {
     case "deleteSubtree":
       return state.selectedId === state.note.root.id ? "根结点不能删除" : null;
@@ -90,10 +90,14 @@ export function commandError(state: EditorState, command: Command): string | nul
 }
 
 export function applyCommand(state: EditorState, command: Command): EditorState {
-  if (state.editingId !== null && SELECTION_COMMANDS.has(command.type)) return state;
-  if (commandError(state, command) !== null) return state;
-  const next = command.type === "undo" ? undo(state) : record(state, execute(state, command));
-  return forgetMissingCut(next);
+  if (isIgnored(state, command) || commandError(state, command) !== null) return state;
+  const next = execute(state, command);
+  // 撤销本身不进撤销历史。
+  return forgetMissingCut(command.type === "undo" ? next : record(state, next));
+}
+
+function isIgnored(state: EditorState, command: Command): boolean {
+  return state.editingId !== null && SELECTION_COMMANDS.has(command.type);
 }
 
 function execute(state: EditorState, command: Command): EditorState {
@@ -120,7 +124,7 @@ function execute(state: EditorState, command: Command): EditorState {
     case "paste":
       return state.cutId === null ? state : paste(state, state.cutId, state.selectedId);
     case "undo":
-      return state;
+      return undo(state);
   }
 }
 
@@ -195,8 +199,8 @@ function deleteSubtree(state: EditorState, id: string): EditorState {
 function paste(state: EditorState, cutId: string, targetId: string): EditorState {
   const node = findNode(state.note.root, (n) => n.id === cutId);
   const parent = parentMap(state.note.root).get(cutId);
-  if (!node || !parent) return { ...state, cutId: null };
-  if (parent.id === targetId) return { ...state, cutId: null };
+  // 粘贴回原来的父结点：笔记不变，只取消剪切。
+  if (!node || !parent || parent.id === targetId) return { ...state, cutId: null };
   const root = updateNode(removeNode(state.note.root, parent.id, cutId), targetId, (t) => ({
     ...t,
     children: [...t.children, node],
