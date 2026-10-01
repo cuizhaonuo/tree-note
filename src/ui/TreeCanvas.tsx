@@ -51,7 +51,7 @@ const ARROW_KEYS: Record<string, Direction> = {
   ArrowRight: "right",
 };
 
-/** 要求选中某个结点（打开搜索结果）。每次要求都是新对象，同一个结点也会再选中、居中一次。 */
+/** 要求选中某个结点（打开搜索结果）。每次要求都是新对象，同一个结点也会再选中一次。 */
 export interface FocusRequest {
   target: NodeLocator;
 }
@@ -216,23 +216,19 @@ export function TreeCanvas({ initialState, focus, onNoteChange }: TreeCanvasProp
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [state, selected, layout, collapsed, confirmingDelete, editingTime, editingTitle, dispatch, attempt]);
 
-  // 只在选中结点变化、折叠/展开、选中结点的时间被修改（兄弟顺序可能变了）或打开搜索结果时居中，
+  // 只在选中结点变化、折叠/展开、或选中结点的时间被修改（兄弟顺序可能变了）时居中，
   // 其他重新布局不会把用户手动拖开的视野拉回来。
   // 新出现的结点要等测量出真实高度后再居中，否则多行结点会偏。
   // 当前缩放比例保持不变，translateTo 按这个比例把结点中心移到视野中央。
-  // 刚打开时选中的是根结点，它已经在视野顶部了，不需要居中。
+  // 刚打开时选中的是根结点，它已经在视野顶部了，不需要居中。打开指向根结点的搜索结果（匹配标题）
+  // 也是这样，和从笔记列表打开时看起来一样。
   const selectedTime = selected?.time;
-  const lastCenteredFor = useRef({ selectedId: state.selectedId, collapsed, selectedTime, focus: undefined as FocusRequest | undefined });
+  const lastCenteredFor = useRef({ selectedId: state.selectedId, collapsed, selectedTime });
   const centerPending = useRef(false);
   useEffect(() => {
     const last = lastCenteredFor.current;
-    if (
-      last.selectedId !== state.selectedId ||
-      last.collapsed !== collapsed ||
-      last.selectedTime !== selectedTime ||
-      last.focus !== focus
-    ) {
-      lastCenteredFor.current = { selectedId: state.selectedId, collapsed, selectedTime, focus };
+    if (last.selectedId !== state.selectedId || last.collapsed !== collapsed || last.selectedTime !== selectedTime) {
+      lastCenteredFor.current = { selectedId: state.selectedId, collapsed, selectedTime };
       centerPending.current = true;
     }
     const box = layout.boxes.find((b) => b.node.id === state.selectedId);
@@ -242,7 +238,7 @@ export function TreeCanvas({ initialState, focus, onNoteChange }: TreeCanvasProp
       .transition()
       .duration(250)
       .call(zoomBehavior.current.translateTo, box.x + box.width / 2, box.y + box.height / 2);
-  }, [state.selectedId, collapsed, selectedTime, focus, layout, heights]);
+  }, [state.selectedId, collapsed, selectedTime, layout, heights]);
 
   // 结点高度随文本行数变化：渲染后测量，高度有变化再重新布局。
   useLayoutEffect(() => {
