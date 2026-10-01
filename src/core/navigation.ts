@@ -4,6 +4,7 @@
 // ← / → 到屏幕上同一层相邻的结点，可以跨过不同的子树。
 // 被折叠的结点的后代不可见，导航会跳过它们。
 
+import { sortedChildren } from "./chronology";
 import type { TreeLayout } from "./layout";
 import { findNode, type TreeNode } from "./note";
 
@@ -60,8 +61,7 @@ function childToEnter(
 ): TreeNode | undefined {
   if (collapsed.has(node.id) || node.children.length === 0) return undefined;
   const remembered = node.children.find((c) => c.id === lastVisitedChild.get(node.id));
-  // 时间格式 `YYYY-MM-DD HH:MM` 按字符串比较即按时间比较；时间相同时取文件里靠前的。
-  return remembered ?? node.children.reduce((earliest, c) => (c.time < earliest.time ? c : earliest));
+  return remembered ?? sortedChildren(node)[0];
 }
 
 /** 屏幕上同一层、在 `step` 方向上紧挨着的可见结点。 */

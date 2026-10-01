@@ -480,3 +480,52 @@ describe("undo (Ctrl+Z)", () => {
     expect(state.selectedId).toBe(state.note.root.id);
   });
 });
+
+describe("toggleKind (i)", () => {
+  it("switches the selected node between event and idea", () => {
+    const once = run(selecting(open(TREE), "A1"), [{ type: "toggleKind" }]);
+    expect(serializeNote(once.note)).toContain("    - [想法 2026-09-30 10:10] A1\n");
+    const twice = run(once, [{ type: "toggleKind" }]);
+    expect(serializeNote(twice.note)).toBe(TREE);
+  });
+
+  it("can be undone", () => {
+    const state = run(selecting(open(TREE), "A1"), [{ type: "toggleKind" }, { type: "undo" }]);
+    expect(serializeNote(state.note)).toBe(TREE);
+  });
+
+  it("is ignored while editing, so `i` can be typed", () => {
+    const editing = run(selecting(open(TREE), "B"), [{ type: "startEdit" }]);
+    expect(applyCommand(editing, { type: "toggleKind" })).toBe(editing);
+  });
+});
+
+describe("setTime (t)", () => {
+  it("changes the date and time of the selected node", () => {
+    const state = run(selecting(open(TREE), "B"), [{ type: "setTime", time: "2026-10-02 08:05" }]);
+    expect(serializeNote(state.note)).toContain("  - [事件 2026-10-02 08:05] B\n");
+  });
+
+  it("can be undone", () => {
+    const state = run(selecting(open(TREE), "B"), [{ type: "setTime", time: "2026-10-02 08:05" }, { type: "undo" }]);
+    expect(serializeNote(state.note)).toBe(TREE);
+  });
+
+  it("allows a child to be earlier than its parent", () => {
+    const state = run(selecting(open(TREE), "A1"), [{ type: "setTime", time: "2026-09-29 23:59" }]);
+    expect(serializeNote(state.note)).toContain("    - [事件 2026-09-29 23:59] A1\n");
+  });
+
+  it("refuses a time that does not exist and explains why", () => {
+    const before = selecting(open(TREE), "B");
+    for (const time of ["2026-02-30 10:00", "2026-10-01 24:00", "2026-10-01 9:00", ""]) {
+      expect(commandError(before, { type: "setTime", time })).toBe("时间应为有效的 YYYY-MM-DD HH:MM");
+      expect(applyCommand(before, { type: "setTime", time })).toBe(before);
+    }
+  });
+
+  it("does not record an undo step when the time is unchanged", () => {
+    const state = run(selecting(open(TREE), "B"), [{ type: "setTime", time: "2026-09-30 11:00" }]);
+    expect(state.undoStack).toHaveLength(0);
+  });
+});

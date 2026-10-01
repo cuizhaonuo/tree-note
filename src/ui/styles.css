@@ -115,6 +115,9 @@ button { font: inherit; color: inherit; }
 .node.collapsed.selected {
   box-shadow: 0 0 0 3px var(--selected), 6px 6px 0 1px var(--border);
 }
+/* 时间早于父结点：边框和时间标红，仍然可以保存。想法保留虚线。 */
+.node.too-early { border-color: var(--error); }
+.node.too-early time { color: var(--error); font-weight: 600; }
 /* 被剪切的结点变淡，并带一个“已剪切”标记，直到粘贴或再按一次 x。 */
 .node.cut {
   opacity: 0.55;
@@ -208,6 +211,8 @@ button { font: inherit; color: inherit; }
   color: inherit;
 }
 .dialog p { margin: 0; }
+.time-inputs { display: flex; gap: 8px; }
+.time-inputs input:first-child { flex: 1; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .dialog-actions button {
   padding: 4px 12px;

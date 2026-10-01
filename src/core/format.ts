@@ -13,7 +13,7 @@
 // 以免被误读成子结点；解析时再去掉一个。
 
 import type { Note, NodeKind, TreeNode } from "./note";
-import { newNodeId } from "./note";
+import { isValidNodeTime, newNodeId } from "./note";
 
 export interface ParseError {
   /** 1-based line number in the source file. */
@@ -72,7 +72,7 @@ export function parseNote(source: string): ParseResult {
       if (!match) return fail(i, "列表项前缀无法解析，应为 [事件 YYYY-MM-DD HH:MM] 或 [想法 YYYY-MM-DD HH:MM]");
       const kind = LABEL_KINDS[match[1]];
       if (!kind) return fail(i, `未知的结点类型“${match[1]}”，应为“事件”或“想法”`);
-      if (!isValidTime(match[2])) return fail(i, `时间“${match[2]}”不是有效的日期和时间`);
+      if (!isValidNodeTime(match[2])) return fail(i, `时间“${match[2]}”不是有效的日期和时间`);
 
       const node: TreeNode = {
         id: newNodeId(),
@@ -130,18 +130,4 @@ function unescapeTextLine(line: string): string {
 
 function isBlank(line: string): boolean {
   return line.trim() === "";
-}
-
-function isValidTime(time: string): boolean {
-  const [date, clock] = time.split(" ");
-  const [y, m, d] = date.split("-").map(Number);
-  const [hh, mm] = clock.split(":").map(Number);
-  const probe = new Date(y, m - 1, d);
-  return (
-    probe.getFullYear() === y &&
-    probe.getMonth() === m - 1 &&
-    probe.getDate() === d &&
-    hh < 24 &&
-    mm < 60
-  );
 }

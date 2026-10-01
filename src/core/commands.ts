@@ -6,7 +6,7 @@
 // 输入文字）从开始到确认算一步，确认时笔记没有变化就不记。撤销历史只保存在内存里。
 
 import { initialNavState, parentMap, selectNode, type NavState } from "./navigation";
-import { findNode, newEventNode, type Note, type TreeNode } from "./note";
+import { findNode, isValidNodeTime, newEventNode, type Note, type TreeNode } from "./note";
 
 export interface EditorState extends NavState {
   note: Note;
@@ -42,6 +42,10 @@ export type Command =
   | { type: "cut" }
   /** 把被剪切的结点连同子树移成选中结点的子结点，并选中它。不能粘贴到它自己或它自己的子树里。 */
   | { type: "paste" }
+  /** 选中的结点在事件和想法之间切换。 */
+  | { type: "toggleKind" }
+  /** 修改选中结点的时间。子结点可以早于父结点（界面会标红提示）。 */
+  | { type: "setTime"; time: string }
   /** 撤销最近一步改变笔记的操作，恢复当时的笔记和选中的结点。 */
   | { type: "undo" };
 
@@ -53,6 +57,8 @@ const SELECTION_COMMANDS: ReadonlySet<Command["type"]> = new Set([
   "deleteSubtree",
   "cut",
   "paste",
+  "toggleKind",
+  "setTime",
   "undo",
 ]);
 
@@ -84,6 +90,8 @@ export function commandError(state: EditorState, command: Command): string | nul
         ? "不能粘贴到被剪切的结点自己或它的子树里"
         : null;
     }
+    case "setTime":
+      return isValidNodeTime(command.time) ? null : "时间应为有效的 YYYY-MM-DD HH:MM";
     default:
       return null;
   }
@@ -123,6 +131,10 @@ function execute(state: EditorState, command: Command): EditorState {
       return { ...state, cutId: state.cutId === state.selectedId ? null : state.selectedId };
     case "paste":
       return state.cutId === null ? state : paste(state, state.cutId, state.selectedId);
+    case "toggleKind":
+      return updateSelected(state, (node) => ({ ...node, kind: node.kind === "event" ? "idea" : "event" }));
+    case "setTime":
+      return updateSelected(state, (node) => (node.time === command.time ? node : { ...node, time: command.time }));
     case "undo":
       return undo(state);
   }
@@ -188,6 +200,10 @@ function addNode(state: EditorState, parentId: string, time: string): EditorStat
 function setText(state: EditorState, id: string, text: string): EditorState {
   const root = updateNode(state.note.root, id, (node) => (node.text === text ? node : { ...node, text }));
   return root === state.note.root ? state : { ...state, note: { ...state.note, root } };
+}
+
+function updateSelected(state: EditorState, update: (node: TreeNode) => TreeNode): EditorState {
+  return { ...state, note: { ...state.note, root: updateNode(state.note.root, state.selectedId, update) } };
 }
 
 function deleteSubtree(state: EditorState, id: string): EditorState {

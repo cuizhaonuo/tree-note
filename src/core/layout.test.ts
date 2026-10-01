@@ -52,3 +52,46 @@ describe("layoutTree with collapsed nodes", () => {
     expect(width(new Set())).toBe(430);
   });
 });
+
+describe("layoutTree sibling order", () => {
+  /** 每一层的结点文本，从左到右。 */
+  function rows(root: TreeNode): string[][] {
+    const { boxes } = layoutTree(root, new Map(), OPTIONS, new Set());
+    const result: string[][] = [];
+    for (const box of [...boxes].sort((a, b) => a.x - b.x)) (result[box.depth] ??= []).push(box.node.text);
+    return result;
+  }
+
+  it("places siblings left to right by time, whatever their order in the file", () => {
+    const root = parseTree(`# 乱序
+
+- [事件 2026-09-30 09:00] 根
+  - [事件 2026-09-30 11:00] B
+    - [事件 2026-09-30 11:20] B2
+    - [事件 2026-09-30 11:10] B1
+  - [事件 2026-09-30 10:00] A
+`);
+    expect(rows(root)).toEqual([["根"], ["A", "B"], ["B1", "B2"]]);
+  });
+
+  it("compares dates before clock times", () => {
+    const root = parseTree(`# 跨天
+
+- [事件 2026-09-30 09:00] 根
+  - [事件 2026-10-01 08:00] 第二天早上
+  - [事件 2026-09-30 23:00] 当天夜里
+`);
+    expect(rows(root)[1]).toEqual(["当天夜里", "第二天早上"]);
+  });
+
+  it("keeps the file order for siblings with the same time", () => {
+    const root = parseTree(`# 同时
+
+- [事件 2026-09-30 09:00] 根
+  - [事件 2026-09-30 10:00] 甲
+  - [事件 2026-09-30 10:00] 乙
+  - [事件 2026-09-30 09:30] 丙
+`);
+    expect(rows(root)[1]).toEqual(["丙", "甲", "乙"]);
+  });
+});

@@ -3,13 +3,25 @@
 // 选择状态：方向键移动选中状态，Enter / Shift+Enter 新建子结点 / 兄弟结点，F2 或双击编辑。
 // 编辑状态：Enter 或 Esc 确认，Shift+Enter 换行。
 // 空格折叠或展开选中结点的子树，折叠状态只保存在内存里。
+// i 在事件和想法之间切换，t 弹出时间编辑框；兄弟结点按时间排列，每天第一个结点显示日期，
+// 早于父结点的结点标红。
 // Delete 确认后删除子树；x 标记剪切，v 粘贴为选中结点的子结点；Ctrl+Z 撤销。被拒绝的操作给出提示。
 // 画布用 d3-zoom 缩放（滚轮）和平移（拖动），选中的结点会移动到视野中央。
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { select } from "d3-selection";
 import "d3-transition";
 import { zoom, zoomIdentity, type ZoomBehavior } from "d3-zoom";
+import { dayMarkers, timeViolations } from "../core/chronology";
 import { expand, hiddenCount, reveal, toggleCollapsed } from "../core/collapse";
 import { applyCommand, commandError, type Command, type EditorState } from "../core/commands";
 import { layoutTree, type LayoutOptions, type NodeBox } from "../core/layout";
@@ -50,6 +62,7 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
   const dispatch = useCallback((command: Command) => setState((s) => applyCommand(s, command)), []);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [editingTime, setEditingTime] = useState(false);
   const [hint, setHint] = useState<{ text: string } | null>(null);
 
   // 每次提示都是新对象，同一句提示连续出现时也会重新计时。
@@ -65,6 +78,8 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
   }, [note, state.selectedId]);
 
   const layout = useMemo(() => layoutTree(note.root, heights, LAYOUT, collapsed), [note, heights, collapsed]);
+  const dated = useMemo(() => dayMarkers(note.root), [note]);
+  const tooEarly = useMemo(() => timeViolations(note.root), [note]);
 
   const viewportEl = useRef<HTMLDivElement>(null);
   const treeEl = useRef<HTMLDivElement>(null);
@@ -102,7 +117,7 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
   const selected = findNode(note.root, (n) => n.id === state.selectedId);
 
   useEffect(() => {
-    if (state.editingId !== null || confirmingDelete) return;
+    if (state.editingId !== null || confirmingDelete || editingTime) return;
     /** 被规则拒绝的命令只给出提示；允许时执行 `proceed`，默认直接执行命令。 */
     function attempt(command: Command, proceed = () => dispatch(command)) {
       const error = commandError(state, command);
@@ -144,21 +159,30 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
       } else if (e.key === "x" || e.key === "v") {
         e.preventDefault();
         attempt({ type: e.key === "x" ? "cut" : "paste" });
+      } else if (e.key === "i") {
+        e.preventDefault();
+        dispatch({ type: "toggleKind" });
+      } else if (e.key === "t") {
+        e.preventDefault();
+        setEditingTime(true);
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [state, selected, layout, collapsed, confirmingDelete, dispatch]);
+  }, [state, selected, layout, collapsed, confirmingDelete, editingTime, dispatch]);
 
-  // 只在选中结点变化或折叠/展开时居中，其他重新布局不会把用户手动拖开的视野拉回来。
+  // 只在选中结点变化、折叠/展开、或选中结点的时间被修改（兄弟顺序可能变了）时居中，
+  // 其他重新布局不会把用户手动拖开的视野拉回来。
   // 新出现的结点要等测量出真实高度后再居中，否则多行结点会偏。
   // 当前缩放比例保持不变，translateTo 按这个比例把结点中心移到视野中央。
   // 刚打开时选中的是根结点，它已经在视野顶部了，不需要居中。
-  const lastCenteredFor = useRef({ selectedId: state.selectedId, collapsed });
+  const selectedTime = selected?.time;
+  const lastCenteredFor = useRef({ selectedId: state.selectedId, collapsed, selectedTime });
   const centerPending = useRef(false);
   useEffect(() => {
-    if (lastCenteredFor.current.selectedId !== state.selectedId || lastCenteredFor.current.collapsed !== collapsed) {
-      lastCenteredFor.current = { selectedId: state.selectedId, collapsed };
+    const last = lastCenteredFor.current;
+    if (last.selectedId !== state.selectedId || last.collapsed !== collapsed || last.selectedTime !== selectedTime) {
+      lastCenteredFor.current = { selectedId: state.selectedId, collapsed, selectedTime };
       centerPending.current = true;
     }
     const box = layout.boxes.find((b) => b.node.id === state.selectedId);
@@ -168,7 +192,7 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
       .transition()
       .duration(250)
       .call(zoomBehavior.current.translateTo, box.x + box.width / 2, box.y + box.height / 2);
-  }, [state.selectedId, collapsed, layout, heights]);
+  }, [state.selectedId, collapsed, selectedTime, layout, heights]);
 
   // 结点高度随文本行数变化：渲染后测量，高度有变化再重新布局。
   useLayoutEffect(() => {
@@ -192,6 +216,7 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
           </svg>
           {layout.boxes.map((box) => {
             const isCollapsed = collapsed.has(box.node.id);
+            const isTooEarly = tooEarly.has(box.node.id);
             return (
               <div
                 key={box.node.id}
@@ -199,7 +224,7 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
                   if (el) nodeEls.current.set(box.node.id, el);
                   else nodeEls.current.delete(box.node.id);
                 }}
-                className={`node node-${box.node.kind}${box.node.id === state.selectedId ? " selected" : ""}${isCollapsed ? " collapsed" : ""}${box.node.id === state.cutId ? " cut" : ""}`}
+                className={`node node-${box.node.kind}${box.node.id === state.selectedId ? " selected" : ""}${isCollapsed ? " collapsed" : ""}${box.node.id === state.cutId ? " cut" : ""}${isTooEarly ? " too-early" : ""}`}
                 aria-current={box.node.id === state.selectedId || undefined}
                 aria-expanded={box.node.children.length > 0 ? !isCollapsed : undefined}
                 style={{ left: box.x, top: box.y, width: box.width }}
@@ -207,8 +232,11 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
               >
                 <div className="node-meta">
                   {box.node.kind === "idea" && <span className="node-icon" aria-label="想法">💡</span>}
-                  <time dateTime={box.node.time.replace(" ", "T")} title={box.node.time}>
-                    {box.node.time.slice(11)}
+                  <time
+                    dateTime={box.node.time.replace(" ", "T")}
+                    title={isTooEarly ? `${box.node.time}：早于父结点` : box.node.time}
+                  >
+                    {dated.has(box.node.id) ? box.node.time : box.node.time.slice(11)}
                   </time>
                   {box.node.id === state.cutId && (
                     <span className="node-cut-badge" title="已剪切，到目标结点按 v 粘贴">
@@ -241,6 +269,19 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
         <div className="hint" role="status">
           {hint.text}
         </div>
+      )}
+      {editingTime && selected && (
+        <TimeDialog
+          time={selected.time}
+          onConfirm={(time) => {
+            setEditingTime(false);
+            const command: Command = { type: "setTime", time };
+            const error = commandError(state, command);
+            if (error) setHint({ text: error });
+            else dispatch(command);
+          }}
+          onCancel={() => setEditingTime(false)}
+        />
       )}
       {confirmingDelete && selected && (
         <ConfirmDelete
@@ -282,6 +323,46 @@ function ConfirmDelete({ node, onConfirm, onCancel }: { node: TreeNode; onConfir
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** 修改结点时间：日期和时间两个输入框，Enter 确认，Esc 取消。 */
+function TimeDialog({
+  time,
+  onConfirm,
+  onCancel,
+}: {
+  time: string;
+  onConfirm: (time: string) => void;
+  onCancel: () => void;
+}) {
+  const [date, setDate] = useState(time.slice(0, 10));
+  const [clock, setClock] = useState(time.slice(11));
+
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    onConfirm(`${date} ${clock}`);
+  }
+
+  return (
+    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
+      <form
+        className="dialog"
+        onSubmit={submit}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
+          }
+        }}
+      >
+        <label htmlFor="node-time-date">结点时间（Enter 确认，Esc 取消）</label>
+        <div className="time-inputs">
+          <input id="node-time-date" type="date" required autoFocus value={date} onChange={(e) => setDate(e.target.value)} />
+          <input type="time" required aria-label="时刻" value={clock} onChange={(e) => setClock(e.target.value)} />
+        </div>
+      </form>
     </div>
   );
 }

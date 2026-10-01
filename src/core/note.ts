@@ -46,3 +46,12 @@ export function formatNodeTime(date: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
+
+/** `time` 是否是格式为 `YYYY-MM-DD HH:MM`、并且真实存在的日期和时间。 */
+export function isValidNodeTime(time: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/.exec(time);
+  if (!match) return false;
+  const [y, m, d, hh, mm] = match.slice(1).map(Number);
+  const probe = new Date(y, m - 1, d);
+  return probe.getFullYear() === y && probe.getMonth() === m - 1 && probe.getDate() === d && hh < 24 && mm < 60;
+}
