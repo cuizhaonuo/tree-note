@@ -6,6 +6,7 @@
 // i 在事件和想法之间切换，t 弹出时间编辑框；兄弟结点按时间排列，每天第一个结点显示日期，
 // 早于父结点的结点标红。
 // Delete 确认后删除子树；x 标记剪切，v 粘贴为选中结点的子结点；Ctrl+Z 撤销。被拒绝的操作给出提示。
+// Ctrl+R 或点击标题修改标题（Enter 确认，Esc 取消）；文件随标题改名由保存负责。
 // 画布用 d3-zoom 缩放（滚轮）和平移（拖动），选中的结点会移动到视野中央。
 
 import {
@@ -63,6 +64,7 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [editingTime, setEditingTime] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(false);
   const [hint, setHint] = useState<{ text: string } | null>(null);
 
   // 每次提示都是新对象，同一句提示连续出现时也会重新计时。
@@ -126,8 +128,22 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
     [state, dispatch],
   );
 
+  // Ctrl+R 在编辑结点时也有效：先确认编辑，再改标题。浏览器默认的刷新页面被拦下。
   useEffect(() => {
-    if (state.editingId !== null || confirmingDelete || editingTime) return;
+    if (confirmingDelete || editingTime) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== "r") return;
+      e.preventDefault();
+      if (e.repeat) return;
+      dispatch({ type: "commitEdit" });
+      setEditingTitle(true);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [confirmingDelete, editingTime, dispatch]);
+
+  useEffect(() => {
+    if (state.editingId !== null || confirmingDelete || editingTime || editingTitle) return;
     function onKeyDown(e: KeyboardEvent) {
       // 编辑框里确认用的 Enter 会继续冒泡到这里，它已经被处理过了（defaultPrevented），不能再新建结点。
       if (e.defaultPrevented || isTextInput(e.target)) return;
@@ -173,7 +189,7 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [state, selected, layout, collapsed, confirmingDelete, editingTime, dispatch, attempt]);
+  }, [state, selected, layout, collapsed, confirmingDelete, editingTime, editingTitle, dispatch, attempt]);
 
   // 只在选中结点变化、折叠/展开、或选中结点的时间被修改（兄弟顺序可能变了）时居中，
   // 其他重新布局不会把用户手动拖开的视野拉回来。
@@ -210,7 +226,20 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
 
   return (
     <div className="canvas">
-      <h1 className="note-title">{note.title}</h1>
+      {editingTitle ? (
+        <TitleEditor
+          title={note.title}
+          onConfirm={(title) => {
+            setEditingTitle(false);
+            attempt({ type: "rename", title });
+          }}
+          onCancel={() => setEditingTitle(false)}
+        />
+      ) : (
+        <h1 className="note-title" title="点击或按 Ctrl+R 修改标题" onClick={() => setEditingTitle(true)}>
+          {note.title}
+        </h1>
+      )}
       <div className="viewport" ref={viewportEl}>
         <div className="tree" ref={treeEl}>
           <svg className="links">
@@ -365,6 +394,50 @@ function TimeDialog({
         </div>
       </form>
     </div>
+  );
+}
+
+/** 修改标题：Enter 或点到别处确认，Esc 取消。 */
+function TitleEditor({
+  title,
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  onConfirm: (title: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(title);
+  // 确认或取消后输入框被移除，这时的失焦不能再确认一次。
+  const done = useRef(false);
+
+  function finish(confirm: boolean) {
+    if (done.current) return;
+    done.current = true;
+    if (confirm) onConfirm(value);
+    else onCancel();
+  }
+
+  return (
+    <input
+      className="note-title-input"
+      aria-label="笔记标题"
+      autoFocus
+      onFocus={(e) => e.currentTarget.select()}
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+        if (e.key === "Enter" || e.key === "Escape") {
+          e.preventDefault();
+          finish(e.key === "Enter");
+        }
+      }}
+      // 和结点编辑一样：切换窗口导致的失焦不算。
+      onBlur={() => {
+        if (document.hasFocus()) finish(true);
+      }}
+    />
   );
 }
 

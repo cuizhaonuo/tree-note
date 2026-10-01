@@ -46,6 +46,8 @@ export type Command =
   | { type: "toggleKind" }
   /** 修改选中结点的时间。子结点可以早于父结点（界面会标红提示）。 */
   | { type: "setTime"; time: string }
+  /** 修改笔记标题，去掉首尾空白。只改标题，不影响根结点。标题不能为空。 */
+  | { type: "rename"; title: string }
   /** 撤销最近一步改变笔记的操作，恢复当时的笔记和选中的结点。 */
   | { type: "undo" };
 
@@ -59,6 +61,7 @@ const SELECTION_COMMANDS: ReadonlySet<Command["type"]> = new Set([
   "paste",
   "toggleKind",
   "setTime",
+  "rename",
   "undo",
 ]);
 
@@ -92,6 +95,8 @@ export function commandError(state: EditorState, command: Command): string | nul
     }
     case "setTime":
       return isValidNodeTime(command.time) ? null : "时间应为有效的 YYYY-MM-DD HH:MM";
+    case "rename":
+      return command.title.trim() === "" ? "标题不能为空" : null;
     default:
       return null;
   }
@@ -135,6 +140,10 @@ function execute(state: EditorState, command: Command): EditorState {
       return updateSelected(state, (node) => ({ ...node, kind: node.kind === "event" ? "idea" : "event" }));
     case "setTime":
       return updateSelected(state, (node) => (node.time === command.time ? node : { ...node, time: command.time }));
+    case "rename": {
+      const title = command.title.trim();
+      return title === state.note.title ? state : { ...state, note: { ...state.note, title } };
+    }
     case "undo":
       return undo(state);
   }

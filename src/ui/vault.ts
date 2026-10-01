@@ -39,9 +39,41 @@ export async function writeNote(handle: FileSystemFileHandle, text: string): Pro
 
 /** 在文件夹里新建一篇笔记，文件名由标题生成，重名时加后缀。 */
 export async function createNoteFile(dir: FileSystemDirectoryHandle, title: string, text: string): Promise<NoteFile> {
-  const existing: string[] = [];
-  for await (const name of dir.keys()) existing.push(name);
-  const name = noteFileName(title, existing);
+  return writeNewFile(dir, noteFileName(title, await entryNames(dir)), text);
+}
+
+/**
+ * 标题改了以后，把内容写到按新标题命名的文件里，再删掉旧文件；新名字和旧名字一样时直接写回。
+ * 只差大小写时也直接写回旧文件：在不区分大小写的文件系统上新旧是同一个文件，先建后删会把它删掉。
+ */
+export async function renameNoteFile(
+  dir: FileSystemDirectoryHandle,
+  handle: FileSystemFileHandle,
+  title: string,
+  text: string,
+): Promise<NoteFile> {
+  const others = (await entryNames(dir)).filter((name) => name !== handle.name);
+  const name = noteFileName(title, others);
+  if (name.toLowerCase() === handle.name.toLowerCase()) {
+    await writeNote(handle, text);
+    return { name: handle.name, handle, lastModified: (await handle.getFile()).lastModified };
+  }
+  const file = await writeNewFile(dir, name, text);
+  await dir.removeEntry(handle.name);
+  return file;
+}
+
+export async function deleteNoteFile(dir: FileSystemDirectoryHandle, name: string): Promise<void> {
+  await dir.removeEntry(name);
+}
+
+async function entryNames(dir: FileSystemDirectoryHandle): Promise<string[]> {
+  const names: string[] = [];
+  for await (const name of dir.keys()) names.push(name);
+  return names;
+}
+
+async function writeNewFile(dir: FileSystemDirectoryHandle, name: string, text: string): Promise<NoteFile> {
   const handle = await dir.getFileHandle(name, { create: true });
   await writeNote(handle, text);
   return { name, handle, lastModified: (await handle.getFile()).lastModified };

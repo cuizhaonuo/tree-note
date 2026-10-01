@@ -529,3 +529,35 @@ describe("setTime (t)", () => {
     expect(state.undoStack).toHaveLength(0);
   });
 });
+
+describe("rename (Ctrl+R)", () => {
+  it("changes only the title, not the root or the selection", () => {
+    const before = selecting(open(TREE), "A");
+    const state = applyCommand(before, { type: "rename", title: "新标题" });
+    expect(serializeNote(state.note)).toBe(TREE.replace("# 命令", "# 新标题"));
+    expect(state.selectedId).toBe(before.selectedId);
+  });
+
+  it("can be undone", () => {
+    const state = run(open(TREE), [{ type: "rename", title: "新标题" }, { type: "undo" }]);
+    expect(serializeNote(state.note)).toBe(TREE);
+  });
+
+  it("trims spaces around the title", () => {
+    const state = applyCommand(open(TREE), { type: "rename", title: "  新标题 \n" });
+    expect(state.note.title).toBe("新标题");
+  });
+
+  it("refuses an empty title and explains why", () => {
+    const before = open(TREE);
+    for (const title of ["", "   "]) {
+      expect(commandError(before, { type: "rename", title })).toBe("标题不能为空");
+      expect(applyCommand(before, { type: "rename", title })).toBe(before);
+    }
+  });
+
+  it("does not record an undo step when the title is unchanged", () => {
+    const state = applyCommand(open(TREE), { type: "rename", title: " 命令 " });
+    expect(state.undoStack).toHaveLength(0);
+  });
+});

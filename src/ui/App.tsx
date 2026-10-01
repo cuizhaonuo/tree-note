@@ -1,22 +1,31 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { initialEditorState, newNoteState, type EditorState } from "../core/commands";
 import { parseNote, serializeNote, type ParseError } from "../core/format";
 import { formatNodeTime } from "../core/note";
-import { useAutosave, whenSaved, type SaveStatus } from "./autosave";
+import { useAutosave, whenSaved, type Relocate, type SaveStatus, type SaveTarget } from "./autosave";
 import { TreeCanvas } from "./TreeCanvas";
 import {
   createNoteFile,
+  deleteNoteFile,
   isFileSystemAccessSupported,
   listNotes,
   pickVault,
   readNote,
+  renameNoteFile,
   type NoteFile,
 } from "./vault";
 
 type Opened =
   | { status: "none" }
-  | { status: "ok"; file: NoteFile; state: EditorState }
+  /** 重命名后 `file` 换成新文件，`target` 和 `session` 不变，画布不会重新打开。 */
+  | { status: "ok"; file: NoteFile; state: EditorState; target: SaveTarget; session: number }
   | { status: "error"; file: NoteFile; error: ParseError | string };
+
+/** 每次打开笔记的编号，用作画布的 key：打开另一篇笔记时画布重新开始，重命名时不会。 */
+let lastSession = 0;
+function nextSession(): number {
+  return ++lastSession;
+}
 
 export function App() {
   const [vault, setVault] = useState<FileSystemDirectoryHandle | null>(null);
@@ -24,7 +33,23 @@ export function App() {
   const [opened, setOpened] = useState<Opened>({ status: "none" });
   const [vaultError, setVaultError] = useState<string | null>(null);
   const [askingTitle, setAskingTitle] = useState(false);
-  const autosave = useAutosave(opened.status === "ok" ? opened.file.handle : null);
+  const [deleting, setDeleting] = useState<NoteFile | null>(null);
+
+  // 标题变了：换成按新标题命名的文件。
+  const relocate: Relocate = useCallback(
+    async (target, title, text) => {
+      if (!vault) return;
+      const file = await renameNoteFile(vault, target.handle, title, text);
+      target.handle = file.handle;
+      setOpened((o) => (o.status === "ok" && o.target === target ? { ...o, file } : o));
+    },
+    [vault],
+  );
+  // 写完后刷新列表，刚编辑过的笔记移到顶部。
+  const refreshFiles = useCallback(() => {
+    if (vault) listNotes(vault).then(setFiles, (e: unknown) => setVaultError(`无法读取笔记列表：${String(e)}`));
+  }, [vault]);
+  const autosave = useAutosave(opened.status === "ok" ? opened.target : null, relocate, refreshFiles);
 
   // Ctrl+N 新建笔记。注意：普通的 Chrome 标签页里浏览器会抢先处理 Ctrl+N（打开新窗口），
   // 只有把页面安装成应用窗口时才收得到，所以侧栏里另有一个“新建笔记”按钮。
@@ -68,7 +93,7 @@ export function App() {
       const state = newNoteState(title, formatNodeTime(new Date()));
       const file = await createNoteFile(vault, title, serializeNote(state.note));
       setFiles(await listNotes(vault));
-      setOpened({ status: "ok", file, state });
+      setOpened({ status: "ok", file, state, target: { handle: file.handle, title: state.note.title }, session: nextSession() });
       setVaultError(null);
     } catch (e) {
       setVaultError(`无法新建笔记：${String(e)}`);
@@ -82,11 +107,35 @@ export function App() {
       const result = parseNote(await readNote(file));
       setOpened(
         result.ok
-          ? { status: "ok", file, state: initialEditorState(result.note) }
+          ? {
+              status: "ok",
+              file,
+              state: initialEditorState(result.note),
+              target: { handle: file.handle, title: result.note.title },
+              session: nextSession(),
+            }
           : { status: "error", file, error: result.error },
       );
     } catch (e) {
       setOpened({ status: "error", file, error: `无法读取文件：${String(e)}` });
+    }
+  }
+
+  async function deleteNote(file: NoteFile) {
+    if (!vault) return;
+    setDeleting(null);
+    try {
+      if (file.name === openedName) {
+        autosave.discard();
+        setOpened({ status: "none" });
+      }
+      // 等排队的写入完成，否则删掉以后又会被写出来。
+      await whenSaved();
+      await deleteNoteFile(vault, file.name);
+      setFiles(await listNotes(vault));
+      setVaultError(null);
+    } catch (e) {
+      setVaultError(`无法删除笔记：${String(e)}`);
     }
   }
 
@@ -107,8 +156,11 @@ export function App() {
                 className={file.name === openedName ? "active" : undefined}
                 onClick={() => openFile(file)}
               >
-                <span className="note-name">{file.name.replace(/\.md$/i, "")}</span>
+                <span className="note-name">{noteName(file)}</span>
                 <span className="note-date">{formatModified(file.lastModified)}</span>
+              </button>
+              <button className="note-delete" title="删除笔记" aria-label={`删除 ${noteName(file)}`} onClick={() => setDeleting(file)}>
+                ×
               </button>
             </li>
           ))}
@@ -122,10 +174,13 @@ export function App() {
         {opened.status === "ok" && (
           <>
             <SaveIndicator status={autosave.status} />
-            <TreeCanvas key={opened.file.name} initialState={opened.state} onNoteChange={autosave.schedule} />
+            <TreeCanvas key={opened.session} initialState={opened.state} onNoteChange={autosave.schedule} />
           </>
         )}
         {askingTitle && <TitlePrompt onConfirm={createNote} onCancel={() => setAskingTitle(false)} />}
+        {deleting && (
+          <ConfirmDeleteNote file={deleting} onConfirm={() => deleteNote(deleting)} onCancel={() => setDeleting(null)} />
+        )}
       </main>
     </div>
   );
@@ -157,6 +212,34 @@ function TitlePrompt({ onConfirm, onCancel }: { onConfirm: (title: string) => vo
   );
 }
 
+function ConfirmDeleteNote({ file, onConfirm, onCancel }: { file: NoteFile; onConfirm: () => void; onCancel: () => void }) {
+  return (
+    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
+      <div
+        className="dialog"
+        role="alertdialog"
+        aria-labelledby="confirm-delete-note-message"
+        onKeyDown={(e) => {
+          // 打开着的画布在 window 上监听按键：在“删除”按钮上按 Enter 不能再新建结点。
+          e.stopPropagation();
+          if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
+          }
+        }}
+      >
+        <p id="confirm-delete-note-message">删除笔记“{noteName(file)}”？文件 {file.name} 会被删除，不能撤销。</p>
+        <div className="dialog-actions">
+          <button onClick={onCancel}>取消</button>
+          <button className="danger" autoFocus onClick={onConfirm}>
+            删除
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SaveIndicator({ status }: { status: SaveStatus }) {
   if (status.kind === "error") return <div className="save-status error">保存失败：{status.message}</div>;
   return <div className="save-status">{status.kind === "pending" ? "未保存…" : "已保存"}</div>;
@@ -169,6 +252,10 @@ function ParseErrorView({ file, error }: { file: NoteFile; error: ParseError | s
       <p>{typeof error === "string" ? error : `第 ${error.line} 行：${error.message}`}</p>
     </div>
   );
+}
+
+function noteName(file: NoteFile): string {
+  return file.name.replace(/\.md$/i, "");
 }
 
 function formatModified(ms: number): string {
