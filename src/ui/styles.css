@@ -123,3 +123,56 @@ button { font: inherit; color: inherit; }
   font-size: 12.5px;
 }
 .node-text a { color: var(--event); }
+
+.node-editor {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  field-sizing: content;
+  min-height: 1lh;
+}
+
+.save-status {
+  position: sticky;
+  top: 0;
+  float: right;
+  padding: 8px 16px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 20vh;
+  background: rgb(0 0 0 / 0.25);
+}
+.dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(420px, 90vw);
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.dialog label { font-size: 14px; color: var(--muted); }
+.dialog input {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  font: inherit;
+  color: inherit;
+}

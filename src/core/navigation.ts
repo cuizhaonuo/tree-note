@@ -46,6 +46,13 @@ export function navigate(root: TreeNode, state: NavState, direction: Direction, 
   return { selectedId: target.id, lastVisitedChild: recordVisit(target, parents, state.lastVisitedChild) };
 }
 
+/** 直接选中某个结点（例如新建的结点），和用方向键走到那里一样记录访问路径。 */
+export function selectNode(root: TreeNode, state: NavState, id: string): NavState {
+  const node = findNode(root, (n) => n.id === id);
+  if (!node) return state;
+  return { selectedId: id, lastVisitedChild: recordVisit(node, parentMap(root), state.lastVisitedChild) };
+}
+
 function childToEnter(
   node: TreeNode,
   lastVisitedChild: ReadonlyMap<string, string>,
@@ -92,7 +99,7 @@ function recordVisit(
   return next;
 }
 
-function parentMap(root: TreeNode): Map<string, TreeNode> {
+export function parentMap(root: TreeNode): Map<string, TreeNode> {
   const parents = new Map<string, TreeNode>();
   const stack = [root];
   while (stack.length) {

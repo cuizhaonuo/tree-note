@@ -35,3 +35,14 @@ export function findNode(root: TreeNode, predicate: (node: TreeNode) => boolean)
   }
   return undefined;
 }
+
+/** 新建结点默认是一个空的事件。 */
+export function newEventNode(time: string): TreeNode {
+  return { id: newNodeId(), kind: "event", time, text: "", children: [] };
+}
+
+/** 把本地时间格式化成结点时间 `YYYY-MM-DD HH:MM`。 */
+export function formatNodeTime(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
