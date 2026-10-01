@@ -1,13 +1,19 @@
 // 画布：标题在顶部，下方自上而下渲染整棵树。连线用 SVG，结点用 HTML。
 //
 // 选择状态：方向键移动选中状态，Enter / Shift+Enter 新建子结点 / 兄弟结点，F2 或双击编辑。
-// 编辑状态：Enter 或 Esc 确认，Shift+Enter 换行。选中的结点会滚动到视野中央。
+// 编辑状态：Enter 或 Esc 确认，Shift+Enter 换行。
+// 空格折叠或展开选中结点的子树，折叠状态只保存在内存里。
+// 画布用 d3-zoom 缩放（滚轮）和平移（拖动），选中的结点会移动到视野中央。
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { select } from "d3-selection";
+import "d3-transition";
+import { zoom, zoomIdentity, type ZoomBehavior } from "d3-zoom";
+import { hiddenCount, toggleCollapsed } from "../core/collapse";
 import { applyCommand, type Command, type EditorState } from "../core/commands";
 import { layoutTree, type LayoutOptions, type NodeBox } from "../core/layout";
 import { navigate, type Direction } from "../core/navigation";
-import { formatNodeTime, type Note } from "../core/note";
+import { findNode, formatNodeTime, type Note } from "../core/note";
 import { InlineMarkdown } from "./InlineMarkdown";
 
 const LAYOUT: LayoutOptions = {
@@ -16,7 +22,9 @@ const LAYOUT: LayoutOptions = {
   verticalGap: 48,
   defaultHeight: 56,
 };
-const PADDING = 40;
+/** 打开笔记时根结点离视野顶部的距离。 */
+const TOP_MARGIN = 24;
+const SCALE_EXTENT: [number, number] = [0.1, 2];
 
 const ARROW_KEYS: Record<string, Direction> = {
   ArrowUp: "up",
@@ -24,8 +32,6 @@ const ARROW_KEYS: Record<string, Direction> = {
   ArrowLeft: "left",
   ArrowRight: "right",
 };
-// 折叠功能还没有实现，暂时没有结点被折叠。
-const NO_COLLAPSED: ReadonlySet<string> = new Set();
 
 interface TreeCanvasProps {
   initialState: EditorState;
@@ -40,8 +46,33 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
   const [state, setState] = useState(initialState);
   const { note } = state;
   const dispatch = useCallback((command: Command) => setState((s) => applyCommand(s, command)), []);
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
 
-  const layout = useMemo(() => layoutTree(note.root, heights, LAYOUT), [note, heights]);
+  const layout = useMemo(() => layoutTree(note.root, heights, LAYOUT, collapsed), [note, heights, collapsed]);
+
+  const viewportEl = useRef<HTMLDivElement>(null);
+  const treeEl = useRef<HTMLDivElement>(null);
+  const zoomBehavior = useRef<ZoomBehavior<HTMLDivElement, unknown>>(null);
+
+  // 变换直接写到 DOM 上，缩放和拖动时不触发 React 重新渲染。
+  useEffect(() => {
+    const viewport = viewportEl.current!;
+    const behavior = zoom<HTMLDivElement, unknown>()
+      .scaleExtent(SCALE_EXTENT)
+      // 编辑框里的拖动用来选择文字，不平移画布。
+      .filter((e: Event) => defaultZoomFilter(e) && !isTextInput(e.target))
+      .on("zoom", ({ transform }) => {
+        treeEl.current!.style.transform = transform.toString();
+      });
+    // 双击用来编辑结点，不缩放。
+    select(viewport).call(behavior).on("dblclick.zoom", null);
+    // 根结点的中心线在 x = 0：打开时把它放在视野顶部正中。
+    behavior.transform(select(viewport), zoomIdentity.translate(viewport.clientWidth / 2, TOP_MARGIN));
+    zoomBehavior.current = behavior;
+    return () => {
+      select(viewport).on(".zoom", null);
+    };
+  }, []);
 
   useEffect(() => {
     if (note !== initialState.note) onNoteChange(note);
@@ -55,13 +86,19 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
       const direction = ARROW_KEYS[e.key];
       if (direction && !e.shiftKey) {
         e.preventDefault();
-        setState((s) => ({ ...s, ...navigate(s.note.root, s, direction, { collapsed: NO_COLLAPSED, layout }) }));
+        setState((s) => ({ ...s, ...navigate(s.note.root, s, direction, { collapsed, layout }) }));
         return;
       }
-      // 按住不放时不连续新建结点：第一次按下之后焦点已经在新结点的编辑框里了。
+      // 按住不放时不连续新建结点（第一次按下之后焦点已经在新结点的编辑框里了），也不反复折叠。
       if (e.repeat) return;
-      if (e.key === "Enter") {
+      if (e.key === " " && !e.shiftKey) {
         e.preventDefault();
+        const selected = findNode(note.root, (n) => n.id === state.selectedId);
+        if (selected) setCollapsed((c) => toggleCollapsed(c, selected));
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        // 新的子结点要能看见并编辑，所以先展开选中的结点。
+        if (!e.shiftKey) setCollapsed((c) => withoutId(c, state.selectedId));
         const time = formatNodeTime(new Date());
         dispatch(e.shiftKey ? { type: "addSibling", time } : { type: "addChild", time });
       } else if (e.key === "F2" && !e.shiftKey) {
@@ -71,14 +108,22 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [layout, state.editingId, dispatch]);
+  }, [note, layout, collapsed, state.selectedId, state.editingId, dispatch]);
 
-  // 只在选中结点变化时滚动，重新布局不会把用户手动滚开的视野拉回来。
+  // 只在选中结点变化或折叠/展开时居中，其他重新布局不会把用户手动拖开的视野拉回来。
+  // 当前缩放比例保持不变，translateTo 按这个比例把结点中心移到视野中央。
+  const selectedBox = layout.boxes.find((b) => b.node.id === state.selectedId);
+  // 刚打开时选中的是根结点，它已经在视野顶部了，不需要居中。
+  const centeredOn = useRef({ selectedId: state.selectedId, collapsed });
   useEffect(() => {
-    nodeEls.current
-      .get(state.selectedId)
-      ?.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
-  }, [state.selectedId]);
+    if (centeredOn.current.selectedId === state.selectedId && centeredOn.current.collapsed === collapsed) return;
+    centeredOn.current = { selectedId: state.selectedId, collapsed };
+    if (!selectedBox || !zoomBehavior.current) return;
+    select(viewportEl.current!)
+      .transition()
+      .duration(250)
+      .call(zoomBehavior.current.translateTo, selectedBox.x + selectedBox.width / 2, selectedBox.y + selectedBox.height / 2);
+  }, [state.selectedId, collapsed]);
 
   // 结点高度随文本行数变化：渲染后测量，高度有变化再重新布局。
   useLayoutEffect(() => {
@@ -90,55 +135,57 @@ export function TreeCanvas({ initialState, onNoteChange }: TreeCanvasProps) {
     if (changed) setHeights(measured);
   }, [layout, heights]);
 
-  const { minX, maxX, maxY } = layout.bounds;
-  const offsetX = PADDING - minX;
-  const offsetY = PADDING;
-  const width = maxX - minX + PADDING * 2;
-  const height = maxY + PADDING * 2;
-
   return (
     <div className="canvas">
       <h1 className="note-title">{note.title}</h1>
-      <div className="tree" style={{ width, height }}>
-        <svg className="links" width={width} height={height}>
-          {layout.links.map(({ parent, child }) => (
-            <path
-              key={child.node.id}
-              d={linkPath(parent, child, offsetX, offsetY)}
-            />
-          ))}
-        </svg>
-        {layout.boxes.map((box) => (
-          <div
-            key={box.node.id}
-            ref={(el) => {
-              if (el) nodeEls.current.set(box.node.id, el);
-              else nodeEls.current.delete(box.node.id);
-            }}
-            className={`node node-${box.node.kind}${box.node.id === state.selectedId ? " selected" : ""}`}
-            aria-current={box.node.id === state.selectedId || undefined}
-            style={{ left: box.x + offsetX, top: box.y + offsetY, width: box.width }}
-            onDoubleClick={() => dispatch({ type: "startEdit", nodeId: box.node.id })}
-          >
-            <div className="node-meta">
-              {box.node.kind === "idea" && <span className="node-icon" aria-label="想法">💡</span>}
-              <time dateTime={box.node.time.replace(" ", "T")} title={box.node.time}>
-                {box.node.time.slice(11)}
-              </time>
-            </div>
-            {box.node.id === state.editingId ? (
-              <NodeTextEditor
-                text={box.node.text}
-                onChange={(text) => dispatch({ type: "setText", text })}
-                onCommit={() => dispatch({ type: "commitEdit" })}
-              />
-            ) : (
-              <div className="node-text">
-                <InlineMarkdown text={box.node.text} />
+      <div className="viewport" ref={viewportEl}>
+        <div className="tree" ref={treeEl}>
+          <svg className="links">
+            {layout.links.map(({ parent, child }) => (
+              <path key={child.node.id} d={linkPath(parent, child)} />
+            ))}
+          </svg>
+          {layout.boxes.map((box) => {
+            const isCollapsed = collapsed.has(box.node.id);
+            return (
+              <div
+                key={box.node.id}
+                ref={(el) => {
+                  if (el) nodeEls.current.set(box.node.id, el);
+                  else nodeEls.current.delete(box.node.id);
+                }}
+                className={`node node-${box.node.kind}${box.node.id === state.selectedId ? " selected" : ""}${isCollapsed ? " collapsed" : ""}`}
+                aria-current={box.node.id === state.selectedId || undefined}
+                aria-expanded={box.node.children.length > 0 ? !isCollapsed : undefined}
+                style={{ left: box.x, top: box.y, width: box.width }}
+                onDoubleClick={() => dispatch({ type: "startEdit", nodeId: box.node.id })}
+              >
+                <div className="node-meta">
+                  {box.node.kind === "idea" && <span className="node-icon" aria-label="想法">💡</span>}
+                  <time dateTime={box.node.time.replace(" ", "T")} title={box.node.time}>
+                    {box.node.time.slice(11)}
+                  </time>
+                  {isCollapsed && (
+                    <span className="node-hidden-count" title="已折叠，按空格展开">
+                      +{hiddenCount(box.node)}
+                    </span>
+                  )}
+                </div>
+                {box.node.id === state.editingId ? (
+                  <NodeTextEditor
+                    text={box.node.text}
+                    onChange={(text) => dispatch({ type: "setText", text })}
+                    onCommit={() => dispatch({ type: "commitEdit" })}
+                  />
+                ) : (
+                  <div className="node-text">
+                    <InlineMarkdown text={box.node.text} />
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        ))}
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -188,13 +235,26 @@ function NodeTextEditor({
   );
 }
 
-function linkPath(parent: NodeBox, child: NodeBox, dx: number, dy: number): string {
-  const x1 = parent.x + parent.width / 2 + dx;
-  const y1 = parent.y + parent.height + dy;
-  const x2 = child.x + child.width / 2 + dx;
-  const y2 = child.y + dy;
+function linkPath(parent: NodeBox, child: NodeBox): string {
+  const x1 = parent.x + parent.width / 2;
+  const y1 = parent.y + parent.height;
+  const x2 = child.x + child.width / 2;
+  const y2 = child.y;
   const midY = (y1 + y2) / 2;
   return `M${x1},${y1} C${x1},${midY} ${x2},${midY} ${x2},${y2}`;
+}
+
+function withoutId(set: ReadonlySet<string>, id: string): ReadonlySet<string> {
+  if (!set.has(id)) return set;
+  const next = new Set(set);
+  next.delete(id);
+  return next;
+}
+
+/** d3-zoom 的默认过滤：忽略右键；Ctrl+滚轮是触控板的双指缩放。 */
+function defaultZoomFilter(e: Event): boolean {
+  const { ctrlKey, button } = e as MouseEvent;
+  return (!ctrlKey || e.type === "wheel") && !button;
 }
 
 function isTextInput(target: EventTarget | null): boolean {

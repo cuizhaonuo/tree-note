@@ -2,6 +2,7 @@
 //
 // 结点宽度固定，高度由界面测量后传入（多行文本高度不同）。
 // 同一深度的结点排在同一行，行高取这一层最高的结点。
+// 被折叠的结点的后代不参与布局，也不占位置。
 
 import { hierarchy, tree } from "d3-hierarchy";
 import type { TreeNode } from "./note";
@@ -42,11 +43,12 @@ export function layoutTree(
   root: TreeNode,
   heights: ReadonlyMap<string, number>,
   options: LayoutOptions,
+  collapsed: ReadonlySet<string> = new Set(),
 ): TreeLayout {
   const { nodeWidth, horizontalGap, verticalGap, defaultHeight } = options;
   const heightOf = (node: TreeNode) => heights.get(node.id) ?? defaultHeight;
 
-  const h = hierarchy(root, (node) => node.children);
+  const h = hierarchy(root, (node) => (collapsed.has(node.id) ? undefined : node.children));
   // 行高只影响 y，x 由 tidy tree 计算，所以 nodeSize 的第二维用 1 占位。
   tree<TreeNode>().nodeSize([nodeWidth + horizontalGap, 1])(h);
 

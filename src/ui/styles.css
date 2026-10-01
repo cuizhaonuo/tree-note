@@ -82,10 +82,13 @@ button { font: inherit; color: inherit; }
 .parse-error { padding: 24px; }
 .parse-error h2 { margin-top: 0; color: var(--error); font-size: 18px; }
 
-.canvas { min-width: max-content; }
-.note-title { margin: 0; padding: 24px 40px 0; font-size: 22px; }
-.tree { position: relative; margin: 0 auto; }
-.links { position: absolute; inset: 0; pointer-events: none; }
+.canvas { display: flex; flex-direction: column; height: 100%; }
+.note-title { margin: 0; padding: 24px 40px 8px; font-size: 22px; }
+.viewport { flex: 1; position: relative; overflow: hidden; cursor: grab; }
+.viewport:active { cursor: grabbing; }
+/* 坐标原点是根结点顶边的中点，d3-zoom 的变换以它为基准。 */
+.tree { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+.links { position: absolute; top: 0; left: 0; overflow: visible; pointer-events: none; }
 .links path { fill: none; stroke: var(--link); stroke-width: 1.5; }
 
 .node {
@@ -104,6 +107,21 @@ button { font: inherit; color: inherit; }
 }
 .node.selected {
   box-shadow: 0 0 0 3px var(--selected);
+}
+/* 折叠的结点下面叠一层，看起来像一摞卡片。 */
+.node.collapsed {
+  box-shadow: 3px 3px 0 -1px var(--panel), 3px 3px 0 1px var(--border);
+}
+.node.collapsed.selected {
+  box-shadow: 0 0 0 3px var(--selected), 6px 6px 0 1px var(--border);
+}
+.node-hidden-count {
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: var(--code-bg);
+  color: var(--text);
+  font-size: 11px;
 }
 .node-meta {
   display: flex;
@@ -140,9 +158,10 @@ button { font: inherit; color: inherit; }
 }
 
 .save-status {
-  position: sticky;
+  position: absolute;
   top: 0;
-  float: right;
+  right: 0;
+  z-index: 1;
   padding: 8px 16px;
   font-size: 12px;
   color: var(--muted);

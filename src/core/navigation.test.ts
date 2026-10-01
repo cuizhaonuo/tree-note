@@ -28,13 +28,13 @@ function parseTree(md: string): TreeNode {
   return result.note.root;
 }
 
-function layoutOf(root: TreeNode): TreeLayout {
-  return layoutTree(root, new Map(), {
-    nodeWidth: 100,
-    horizontalGap: 10,
-    verticalGap: 20,
-    defaultHeight: 40,
-  });
+function layoutOf(root: TreeNode, collapsed: ReadonlySet<string>): TreeLayout {
+  return layoutTree(
+    root,
+    new Map(),
+    { nodeWidth: 100, horizontalGap: 10, verticalGap: 20, defaultHeight: 40 },
+    collapsed,
+  );
 }
 
 /** 按文本找结点 id，测试里用文本指代结点更易读。 */
@@ -56,8 +56,8 @@ function press(
   keys: Direction[],
   options: { collapsed?: ReadonlySet<string>; from?: NavState } = {},
 ): string[] {
-  const layout = layoutOf(root);
   const collapsed = options.collapsed ?? new Set<string>();
+  const layout = layoutOf(root, collapsed);
   let state = options.from ?? initialNavState(root);
   return keys.map((key) => {
     state = navigate(root, state, key, { collapsed, layout });
@@ -182,5 +182,18 @@ describe("← / →", () => {
 `);
     const collapsed = new Set([idOf(root, "M")]);
     expect(press(root, ["down", "down", "right", "left"], { collapsed })).toEqual(["A", "A1", "B1", "A1"]);
+  });
+
+  it("moves across a collapsed node on its own row", () => {
+    const root = parseTree(TREE);
+    const collapsed = new Set([idOf(root, "A")]);
+    expect(press(root, ["down", "right", "left"], { collapsed })).toEqual(["A", "B", "A"]);
+  });
+
+  it("stops at the end of the row when the nodes before it are hidden", () => {
+    const root = parseTree(TREE);
+    const collapsed = new Set([idOf(root, "A")]);
+    // 折叠 A 之后，第三层只剩 B1、B2；从 B1 向左没有可见结点。
+    expect(press(root, ["down", "right", "down", "left"], { collapsed })).toEqual(["A", "B", "B1", "B1"]);
   });
 });
