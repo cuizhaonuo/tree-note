@@ -58,7 +58,6 @@ button { font: inherit; color: inherit; }
   background: var(--bg);
   cursor: pointer;
 }
-.vault-name { font-size: 13px; color: var(--muted); }
 .note-list { list-style: none; margin: 0; padding: 0; }
 .note-list li { display: flex; align-items: center; border-radius: 6px; }
 .note-list li:hover { background: var(--bg); }
@@ -112,7 +111,7 @@ button { font: inherit; color: inherit; }
 .search-hits mark { padding: 0 1px; border-radius: 2px; background: var(--mark); color: var(--text); }
 
 .main { flex: 1; overflow: auto; position: relative; }
-.empty, .notice { padding: 24px; color: var(--muted); }
+.empty { padding: 24px; color: var(--muted); }
 .error { color: var(--error); font-size: 13px; }
 .parse-error { padding: 24px; }
 .parse-error h2 { margin-top: 0; color: var(--error); font-size: 18px; }

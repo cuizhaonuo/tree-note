@@ -1,14 +1,12 @@
-// 侧栏的全文搜索：输入关键词后在笔记库所有笔记里搜索，结果代替笔记列表显示。
+// 侧栏的全文搜索：输入关键词后调用服务器接口在所有笔记里搜索，结果代替笔记列表显示。
 // Enter 打开第一条结果，Esc 清空。
 //
-// 打开着的笔记用内存里的内容搜索（自动保存可能还没写到文件），其他笔记从文件读。
-// 读之前先等排队的写入和改名完成。
+// 搜索前先等排队的写入和改名完成，服务器看到的就是最新内容。
 
 import { useEffect, useState, type ReactNode } from "react";
-import { parseNote } from "../core/format";
-import { searchNotes, type SearchableNote, type SearchHit } from "../core/search";
+import type { SearchHit } from "../core/search";
+import { searchNotes } from "./api";
 import { whenSaved } from "./autosave";
-import { listNotes, readNote, type NoteFile } from "./vault";
 
 /** 输入停顿这么久之后才搜索。 */
 const DEBOUNCE_MS = 150;
@@ -18,26 +16,21 @@ const MAX_SHOWN = 200;
 type SearchResult =
   | { status: "searching" }
   /** `query` 是得出这些结果的查询；新的查询还在搜索时，旧结果照样显示。 */
-  | { status: "done"; query: string; hits: SearchHit[]; files: NoteFile[] }
+  | { status: "done"; query: string; hits: SearchHit[] }
   | { status: "error"; message: string };
 
-interface VaultSearchProps {
-  vault: FileSystemDirectoryHandle;
-  /** 打开着的笔记：文件名和内存里的内容。只在搜索时调用。 */
-  openNote: () => SearchableNote | null;
-  onOpen: (file: NoteFile, hit: SearchHit) => void;
+interface NoteSearchProps {
+  onOpen: (name: string, hit: SearchHit) => void;
   /** 没有在搜索时显示的内容（笔记列表）。 */
   children: ReactNode;
 }
 
-export function VaultSearch({ vault, openNote, onOpen, children }: VaultSearchProps) {
+export function NoteSearch({ onOpen, children }: NoteSearchProps) {
   const [query, setQuery] = useState("");
-  const result = useVaultSearch(vault, query, openNote);
+  const result = useNoteSearch(query);
 
   function open(hit: SearchHit) {
-    if (result?.status !== "done") return;
-    const file = result.files.find((f) => f.name === hit.file);
-    if (file) onOpen(file, hit);
+    onOpen(hit.file, hit);
   }
 
   return (
@@ -68,11 +61,7 @@ export function VaultSearch({ vault, openNote, onOpen, children }: VaultSearchPr
 }
 
 /** 查询为空时返回 null。 */
-function useVaultSearch(
-  vault: FileSystemDirectoryHandle,
-  query: string,
-  openNote: () => SearchableNote | null,
-): SearchResult | null {
+function useNoteSearch(query: string): SearchResult | null {
   const [result, setResult] = useState<SearchResult | null>(null);
   const blank = query.trim() === "";
 
@@ -86,22 +75,8 @@ function useVaultSearch(
     const timer = setTimeout(async () => {
       try {
         await whenSaved();
-        const files = await listNotes(vault);
-        const open = openNote();
-        const notes = await Promise.all(
-          files.map(async (file): Promise<SearchableNote | null> => {
-            if (open && file.name === open.file) return open;
-            // 读不了或格式有误的笔记跳过，打开它时会看到原因。
-            try {
-              const parsed = parseNote(await readNote(file));
-              return parsed.ok ? { file: file.name, note: parsed.note } : null;
-            } catch {
-              return null;
-            }
-          }),
-        );
-        const hits = searchNotes(notes.filter((n) => n !== null), query);
-        if (!cancelled) setResult({ status: "done", query, hits, files });
+        const hits = await searchNotes(query);
+        if (!cancelled) setResult({ status: "done", query, hits });
       } catch (e) {
         if (!cancelled) setResult({ status: "error", message: `搜索失败：${String(e)}` });
       }
@@ -110,8 +85,7 @@ function useVaultSearch(
       cancelled = true;
       clearTimeout(timer);
     };
-    // openNote 每次渲染都是新函数，只在搜索时调用，不应该触发重新搜索。
-  }, [vault, query, blank]);
+  }, [query, blank]);
 
   return result;
 }

@@ -1,4 +1,4 @@
-// 服务器端的笔记库：数据目录下每篇笔记一个 `.md` 文件，规则和浏览器端的 vault.ts 一致。
+// 服务器端的笔记库：数据目录下每篇笔记一个 `.md` 文件，文件名由标题生成。
 
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
