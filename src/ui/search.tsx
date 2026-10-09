@@ -1,12 +1,12 @@
 // 侧栏的全文搜索：输入关键词后调用服务器接口在所有笔记里搜索，结果代替笔记列表显示。
 // Enter 打开第一条结果，Esc 清空。
 //
-// 搜索前先等排队的写入和改名完成，服务器看到的就是最新内容。
+// 搜索前先把还在防抖的改动立即写入并等队列清空，打开着的笔记的最新内容服务器也能看到。
 
 import { useEffect, useState, type ReactNode } from "react";
 import type { SearchHit } from "../core/search";
 import { searchNotes } from "./api";
-import { whenSaved } from "./autosave";
+import { flushSaves } from "./autosave";
 
 /** 输入停顿这么久之后才搜索。 */
 const DEBOUNCE_MS = 150;
@@ -74,7 +74,7 @@ function useNoteSearch(query: string): SearchResult | null {
     let cancelled = false;
     const timer = setTimeout(async () => {
       try {
-        await whenSaved();
+        await flushSaves();
         const hits = await searchNotes(query);
         if (!cancelled) setResult({ status: "done", query, hits });
       } catch (e) {

@@ -32,9 +32,11 @@ export function App() {
   const [deleting, setDeleting] = useState<api.NoteEntry | null>(null);
 
   const refreshFiles = useCallback(() => {
-    api.listNotes().then(setFiles, (e: unknown) => setLoadError(`无法读取笔记列表：${String(e)}`));
+    return api.listNotes().then(setFiles, (e: unknown) => setLoadError(`无法读取笔记列表：${String(e)}`));
   }, []);
-  useEffect(refreshFiles, [refreshFiles]);
+  useEffect(() => {
+    refreshFiles();
+  }, [refreshFiles]);
 
   // 标题变了：服务器已换成按新标题命名的文件。打开的笔记和列表立即换成新名字，不等刷新列表，
   // 否则点到旧名字会去读、去删已经不存在的旧文件。
@@ -68,7 +70,7 @@ export function App() {
     try {
       const state = newNoteState(title, formatNodeTime(new Date()));
       const { name, version } = await api.createNote(title, serializeNote(state.note));
-      refreshFiles();
+      await refreshFiles();
       setOpened({ status: "ok", name, state, target: { name, title, version }, session: nextSession() });
       setLoadError(null);
     } catch (e) {
@@ -118,7 +120,7 @@ export function App() {
       await whenSaved();
       // 打开的笔记可能刚改过名，要删的是它现在的文件。
       await api.deleteNote(target ? target.name : file.name);
-      refreshFiles();
+      await refreshFiles();
       setLoadError(null);
     } catch (e) {
       setLoadError(`无法删除笔记：${String(e)}`);

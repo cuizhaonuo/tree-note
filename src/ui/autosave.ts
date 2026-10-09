@@ -34,10 +34,17 @@ export type OnRenamed = (previousName: string, name: string) => void;
 
 let queue: Promise<void> = Promise.resolve();
 let unfinishedWrites = 0;
+const pendingFlushes = new Set<() => void>();
 
 /** 等到目前排队的所有写入都完成。 */
 export function whenSaved(): Promise<void> {
   return queue;
+}
+
+/** 立即写入所有还在防抖的改动，并等全部写完。 */
+export async function flushSaves(): Promise<void> {
+  for (const flush of pendingFlushes) flush();
+  await whenSaved();
 }
 
 /** `onSaved` 在所有写入完成后调用，界面可以借此刷新笔记列表的修改时间。 */
@@ -91,16 +98,21 @@ export function useAutosave(target: SaveTarget | null, onRenamed: OnRenamed, onS
       queue = queue.catch((e: unknown) => setStatus({ kind: "error", message: String(e) }));
     }
 
+    /** 写一次：带上当前的文件名和版本号（前排队的写入和改名可能已经换了它们），成功后记住新名字和新版本号。 */
+    async function performWrite(text: string, title?: string) {
+      const from = saving.name;
+      const result = await writeNote(from, text, saving.version, title);
+      saving.name = result.name;
+      saving.version = result.version;
+      if (result.name !== from) onRenamedRef.current(from, result.name);
+    }
+
     function flush() {
       clearTimeout(timer);
       if (pending === null) return;
       const text = pending;
       pending = null;
-      // 写入时才取当前的文件名和版本号：前排队的写入和改名可能已经换了它们。
-      enqueue(async () => {
-        const result = await writeNote(saving.name, text, saving.version);
-        saving.version = result.version;
-      });
+      enqueue(() => performWrite(text));
     }
 
     scheduleRef.current = (note) => {
@@ -114,13 +126,8 @@ export function useAutosave(target: SaveTarget | null, onRenamed: OnRenamed, onS
         const previous = saving.title;
         saving.title = title;
         enqueue(async () => {
-          // 写入时才取当前的文件名和版本号：前排队的写入和改名可能已经换了它们。
-          const from = saving.name;
           try {
-            const result = await writeNote(from, text, saving.version, title);
-            saving.name = result.name;
-            saving.version = result.version;
-            if (result.name !== from) onRenamedRef.current(from, result.name);
+            await performWrite(text, title);
           } catch (e) {
             // 这之后又排了别的改名就不恢复，那次改名会再试。
             if (!(e instanceof ConflictError) && saving.title === title) saving.title = previous;
@@ -151,8 +158,10 @@ export function useAutosave(target: SaveTarget | null, onRenamed: OnRenamed, onS
     }
     document.addEventListener("visibilitychange", onVisibilityChange);
     window.addEventListener("beforeunload", onBeforeUnload);
+    pendingFlushes.add(flush);
     return () => {
       flush();
+      pendingFlushes.delete(flush);
       scheduleRef.current = () => {};
       discardRef.current = () => {};
       document.removeEventListener("visibilitychange", onVisibilityChange);
