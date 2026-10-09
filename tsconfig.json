@@ -12,7 +12,7 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "noEmit": true,
-    "types": ["vite/client", "wicg-file-system-access"]
+    "types": ["vite/client", "wicg-file-system-access", "node"]
   },
   "include": ["src", "vite.config.ts"]
 }

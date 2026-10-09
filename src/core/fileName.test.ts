@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { noteFileName } from "./fileName";
+import { isValidNoteFileName, noteFileName } from "./fileName";
 
 describe("noteFileName", () => {
   it("uses the title as the file name", () => {
@@ -21,5 +21,29 @@ describe("noteFileName", () => {
 
   it("falls back to a default name when nothing usable is left", () => {
     expect(noteFileName(" .. ", [])).toBe("未命名.md");
+  });
+});
+
+describe("isValidNoteFileName", () => {
+  it("accepts a plain .md file name", () => {
+    expect(isValidNoteFileName("日记.md")).toBe(true);
+    expect(isValidNoteFileName("Log-2.md")).toBe(true);
+    expect(isValidNoteFileName("Note.MD")).toBe(true);
+  });
+
+  it("rejects names that do not end with .md", () => {
+    expect(isValidNoteFileName("日记")).toBe(false);
+    expect(isValidNoteFileName("日记.txt")).toBe(false);
+    expect(isValidNoteFileName(".md")).toBe(false);
+  });
+
+  it("rejects names containing path separators", () => {
+    expect(isValidNoteFileName("a/b.md")).toBe(false);
+    expect(isValidNoteFileName("a\\b.md")).toBe(false);
+  });
+
+  it("rejects names containing ..", () => {
+    expect(isValidNoteFileName("..md")).toBe(false);
+    expect(isValidNoteFileName("a..b.md")).toBe(false);
   });
 });

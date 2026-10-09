@@ -17,3 +17,14 @@ export function noteFileName(title: string, existing: Iterable<string>): string 
     if (!taken.has(name.toLowerCase())) return name;
   }
 }
+
+/** 服务器只接受符合规则的文件名：以 `.md` 结尾（不区分大小写），不含路径分隔符或 `..`，防止读写目录以外的文件。 */
+export function isValidNoteFileName(name: string): boolean {
+  return (
+    name.length > ".md".length &&
+    name.toLowerCase().endsWith(".md") &&
+    !name.includes("/") &&
+    !name.includes("\\") &&
+    !name.includes("..")
+  );
+}
