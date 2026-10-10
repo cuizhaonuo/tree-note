@@ -16,15 +16,24 @@ install_node() {
   apt-get install -y nodejs
 }
 
+# 在子 shell 里加载代理配置再执行命令：访问 GitHub 要经代理，apt 访问腾讯云镜像则不需要。
+with_proxy() {
+  (
+    if [[ -f /etc/profile.d/proxy.sh ]]; then . /etc/profile.d/proxy.sh; fi
+    "$@"
+  )
+}
+
+# Caddy 的 apt 源（cloudsmith）对这台服务器返回 402，改从 GitHub Releases 下载官方 .deb 包，
+# 它同样会注册 caddy 用户和 systemd 服务。
 install_caddy() {
   if command -v caddy >/dev/null; then return; fi
-  apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl gnupg
-  curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key |
-    gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-  curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt > /etc/apt/sources.list.d/caddy-stable.list
-  chmod o+r /usr/share/keyrings/caddy-stable-archive-keyring.gpg /etc/apt/sources.list.d/caddy-stable.list
-  apt-get update
-  apt-get install -y caddy
+  local tag deb
+  tag=$(with_proxy curl -fsSL https://api.github.com/repos/caddyserver/caddy/releases/latest | sed -n 's/.*"tag_name": *"\(v[^"]*\)".*/\1/p')
+  deb=/tmp/caddy_${tag#v}_linux_$(dpkg --print-architecture).deb
+  with_proxy curl -fsSL -o "$deb" "https://github.com/caddyserver/caddy/releases/download/$tag/$(basename "$deb")"
+  dpkg -i "$deb"
+  rm -f "$deb"
 }
 
 clone_repo() {
