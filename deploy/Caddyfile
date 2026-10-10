@@ -1,0 +1,9 @@
+# 对外入口：监听 80 端口，把请求转给只监听本机的 Node 服务。
+# 端口必须和 /etc/tree-note/tree-note.env 里的 PORT 一致。
+# 以后有了域名，把 ":80" 换成域名，Caddy 会自动申请证书并启用 HTTPS（届时会话 cookie 也要加 Secure）。
+# Caddy 默认会用真实的客户端地址覆盖 X-Forwarded-For，服务端取最后一项作为登录锁定用的 IP。
+
+:80 {
+	encode gzip
+	reverse_proxy 127.0.0.1:8899
+}

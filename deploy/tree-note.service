@@ -1,0 +1,25 @@
+# systemd 服务：开机自启、崩溃后自动重启。由 deploy.sh 安装到 /etc/systemd/system/。
+# 数据目录由 StateDirectory 创建在 /var/lib/tree-note，属于 treenote 用户；其余文件系统只读。
+
+[Unit]
+Description=tree-note notes server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=treenote
+Group=treenote
+WorkingDirectory=/opt/tree-note
+EnvironmentFile=/etc/tree-note/tree-note.env
+ExecStart=/opt/tree-note/node_modules/.bin/tsx src/server/index.ts
+Restart=always
+RestartSec=2
+
+StateDirectory=tree-note
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
