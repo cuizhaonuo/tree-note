@@ -1,175 +1,105 @@
-// 自动保存：笔记变化后防抖约 1 秒通过服务器接口写回。
+// 自动保存接到浏览器上：每打开一篇笔记建一个 SaveSession（逻辑见 saveSession.ts），
+// 网络请求用服务器接口，暂存用 localStorage。
 //
-// 所有写入排成一个队列依次执行，打开文件前可以等队列清空，避免读到写了一半的旧内容。
-// 切换笔记、页面隐藏时立即写入还没写的改动；关闭页面时如果还有没写完的改动，浏览器会提示。
-//
-// 每次写入都带上基于的版本号，成功后换成服务器返回的新版本号。标题变化时（重命名或撤销重命名）
-// 在同一次写入里带上新标题，服务器一并完成重命名并返回新文件名。
-// 版本冲突（409）说明笔记在别处被改过：自动保存停止，不悄悄覆盖，界面提示刷新。
+// 切换笔记、页面隐藏时立即写入还没写的改动；页面要关闭时把还没写完的改动暂存下来，下次打开这篇笔记时恢复。
+// 网络恢复（online 事件）时立即重试，不等退避。
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { serializeNote } from "../core/format";
-import type { Note } from "../core/note";
-import { ConflictError, writeNote } from "./api";
+import { useEffect } from "react";
+import { readNote, writeNote } from "./api";
+import { SaveSession, discardStash, type OpenedFile, type SaveDeps, type SaveEvents } from "./saveSession";
 
-const DEBOUNCE_MS = 1000;
+export type { SaveStatus } from "./saveSession";
 
-export type SaveStatus =
-  | { kind: "saved" }
-  | { kind: "saving" }
-  | { kind: "pending" }
-  | { kind: "conflict" }
-  | { kind: "error"; message: string };
+/** 暂存按用户区分；登录做好之前只有这一个本地用户。 */
+const USER = "local";
 
-/** 打开的笔记写到哪个文件。重命名后这里换成新名字和新版本号：只有自动保存会修改这个对象。 */
-export interface SaveTarget {
-  name: string;
-  /** 文件里现在的标题（包括已经排队、还没写完的改名）。 */
-  title: string;
-  version: string;
+/** localStorage 不可用（比如被浏览器禁用）时当作没有暂存，不影响正常保存。 */
+const storage: SaveDeps["storage"] = {
+  getItem(key) {
+    try {
+      return localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  },
+  setItem(key, value) {
+    try {
+      localStorage.setItem(key, value);
+    } catch {
+      // 存不下就算了，自动重试仍在进行。
+    }
+  },
+  removeItem(key) {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // 同上。
+    }
+  },
+};
+
+const deps: SaveDeps = { write: writeNote, read: readNote, storage, user: USER };
+
+/** 还没结束的会话，以及结束了但还在写最后一次的会话。 */
+const sessions = new Set<SaveSession>();
+
+/**
+ * 开始自动保存一篇刚打开的笔记。`fresh` 表示笔记是刚新建的：同名的旧暂存（之前删掉的同名笔记留下的）不能恢复进来。
+ * 有暂存时 `session.restored` 是要显示的内容。
+ */
+export function startSaving(file: OpenedFile, events: SaveEvents, fresh = false): SaveSession {
+  if (fresh) discardStash(storage, USER, file.name);
+  const session = new SaveSession(file, deps, events);
+  sessions.add(session);
+  return session;
 }
 
-/** 重命名完成后调用，界面把打开着的笔记和列表里的名字换过来。 */
-export type OnRenamed = (previousName: string, name: string) => void;
-
-let queue: Promise<void> = Promise.resolve();
-let unfinishedWrites = 0;
-const pendingFlushes = new Set<() => void>();
-
-/** 等到目前排队的所有写入都完成。 */
-export function whenSaved(): Promise<void> {
-  return queue;
+/** 切换到别的笔记：写完手上的改动后不再管它。`discard` 用于笔记要被删除时。 */
+export function stopSaving(session: SaveSession, how: "close" | "discard" = "close"): void {
+  if (how === "discard") session.discard();
+  else session.close();
+  session.settled().then(() => sessions.delete(session));
 }
 
-/** 立即写入所有还在防抖的改动，并等全部写完。 */
+/** 不是打开着的笔记被删除时，清掉它可能留下的暂存。 */
+export function forgetStash(name: string): void {
+  discardStash(storage, USER, name);
+}
+
+/** 等到正在进行的写入都完成（不等待断网重试）。 */
+export async function whenSaved(): Promise<void> {
+  await Promise.all([...sessions].map((s) => s.settled()));
+}
+
+/** 立即写入所有还在防抖的改动，并等这些写入完成。 */
 export async function flushSaves(): Promise<void> {
-  for (const flush of pendingFlushes) flush();
+  for (const session of sessions) session.flush();
   await whenSaved();
 }
 
-/** `onSaved` 在所有写入完成后调用，界面可以借此刷新笔记列表的修改时间。 */
-export function useAutosave(target: SaveTarget | null, onRenamed: OnRenamed, onSaved: () => void) {
-  const [status, setStatus] = useState<SaveStatus>({ kind: "saved" });
-  const scheduleRef = useRef<(note: Note) => void>(() => {});
-  const discardRef = useRef<() => void>(() => {});
-  const onRenamedRef = useRef(onRenamed);
-  const onSavedRef = useRef(onSaved);
-  onRenamedRef.current = onRenamed;
-  onSavedRef.current = onSaved;
-
+/** 把打开着的笔记的自动保存接到页面事件上。 */
+export function usePageEvents(session: SaveSession | null): void {
   useEffect(() => {
-    if (!target) return;
-    const saving = target;
-    let pending: string | null = null;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    // 冲突后停止：还没写的改动和之后的改动都不再写，等用户刷新。
-    let stopped = false;
-    const isClean = () => pending === null && unfinishedWrites === 0;
-
-    function enqueue(write: () => Promise<void>) {
-      unfinishedWrites++;
-      queue = queue.then(async () => {
-        if (stopped) {
-          unfinishedWrites--;
-          return;
-        }
-        setStatus({ kind: "saving" });
-        try {
-          await write();
-        } catch (e) {
-          if (e instanceof ConflictError) {
-            stopped = true;
-            pending = null;
-            clearTimeout(timer);
-            scheduleRef.current = () => {};
-            setStatus({ kind: "conflict" });
-            return;
-          }
-          throw e;
-        } finally {
-          unfinishedWrites--;
-        }
-        if (isClean()) {
-          setStatus({ kind: "saved" });
-          onSavedRef.current();
-        }
-      });
-      // 非冲突的错误：记录状态，队列继续前进。
-      queue = queue.catch((e: unknown) => setStatus({ kind: "error", message: String(e) }));
+    if (!session) return;
+    const saving = session;
+    // 页面要关闭，或者隐藏的标签页可能被浏览器直接回收：先暂存再写，写成功后暂存会自动清除。
+    function onPageHide() {
+      saving.stashUnsaved();
+      saving.flush();
     }
-
-    /** 写一次：带上当前的文件名和版本号（前排队的写入和改名可能已经换了它们），成功后记住新名字和新版本号。 */
-    async function performWrite(text: string, title?: string) {
-      const from = saving.name;
-      const result = await writeNote(from, text, saving.version, title);
-      saving.name = result.name;
-      saving.version = result.version;
-      if (result.name !== from) onRenamedRef.current(from, result.name);
-    }
-
-    function flush() {
-      clearTimeout(timer);
-      if (pending === null) return;
-      const text = pending;
-      pending = null;
-      enqueue(() => performWrite(text));
-    }
-
-    scheduleRef.current = (note) => {
-      const text = serializeNote(note);
-      setStatus({ kind: "pending" });
-      clearTimeout(timer);
-      if (note.title !== saving.title) {
-        // 改名时把最新的内容一起写进新文件，还没写的改动就不用单独写了。
-        pending = null;
-        const { title } = note;
-        const previous = saving.title;
-        saving.title = title;
-        enqueue(async () => {
-          try {
-            await performWrite(text, title);
-          } catch (e) {
-            // 这之后又排了别的改名就不恢复，那次改名会再试。
-            if (!(e instanceof ConflictError) && saving.title === title) saving.title = previous;
-            throw e;
-          }
-        });
-        return;
-      }
-      pending = text;
-      timer = setTimeout(flush, DEBOUNCE_MS);
-    };
-
-    // 文件要被删除：丢掉还没写的改动，之后的改动也不再写。
-    discardRef.current = () => {
-      clearTimeout(timer);
-      pending = null;
-      stopped = true;
-      scheduleRef.current = () => {};
-    };
-
     function onVisibilityChange() {
-      if (document.visibilityState === "hidden") flush();
+      if (document.visibilityState === "hidden") onPageHide();
     }
-    function onBeforeUnload(e: BeforeUnloadEvent) {
-      if (isClean()) return;
-      flush();
-      e.preventDefault();
+    function onOnline() {
+      saving.flush();
     }
     document.addEventListener("visibilitychange", onVisibilityChange);
-    window.addEventListener("beforeunload", onBeforeUnload);
-    pendingFlushes.add(flush);
+    window.addEventListener("pagehide", onPageHide);
+    window.addEventListener("online", onOnline);
     return () => {
-      flush();
-      pendingFlushes.delete(flush);
-      scheduleRef.current = () => {};
-      discardRef.current = () => {};
       document.removeEventListener("visibilitychange", onVisibilityChange);
-      window.removeEventListener("beforeunload", onBeforeUnload);
+      window.removeEventListener("pagehide", onPageHide);
+      window.removeEventListener("online", onOnline);
     };
-  }, [target]);
-
-  const schedule = useCallback((note: Note) => scheduleRef.current(note), []);
-  const discard = useCallback(() => discardRef.current(), []);
-  return { status, schedule, discard };
+  }, [session]);
 }

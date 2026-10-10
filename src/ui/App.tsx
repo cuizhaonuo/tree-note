@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { initialEditorState, newNoteState, type EditorState } from "../core/commands";
 import { parseNote, serializeNote, type ParseError } from "../core/format";
 import { formatNodeTime, type Note } from "../core/note";
 import type { NodeLocator, SearchHit } from "../core/search";
+import type { OpenedFile, SaveSession } from "./saveSession";
 import * as api from "./api";
-import { useAutosave, whenSaved, type OnRenamed, type SaveStatus, type SaveTarget } from "./autosave";
+import { forgetStash, startSaving, stopSaving, usePageEvents, whenSaved, type SaveStatus } from "./autosave";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { NoteSearch } from "./search";
 import { TreeCanvas, type FocusRequest } from "./TreeCanvas";
@@ -12,10 +13,10 @@ import { TreeCanvas, type FocusRequest } from "./TreeCanvas";
 type Opened =
   | { status: "none" }
   /**
-   * 重命名后 `name` 换成新文件名，`target` 和 `session` 不变，画布不会重新打开。
+   * 重命名后 `name` 换成新文件名，`save` 和 `session` 不变，画布不会重新打开。
    * `focus` 是最近一次从搜索结果要求选中的结点。
    */
-  | { status: "ok"; name: string; state: EditorState; target: SaveTarget; session: number; focus?: FocusRequest }
+  | { status: "ok"; name: string; state: EditorState; save: SaveSession; session: number; focus?: FocusRequest }
   | { status: "error"; name: string; error: ParseError | string };
 
 /** 每次打开笔记的编号，用作画布的 key：打开另一篇笔记时画布重新开始，重命名时不会。 */
@@ -30,6 +31,8 @@ export function App() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [askingTitle, setAskingTitle] = useState(false);
   const [deleting, setDeleting] = useState<api.NoteEntry | null>(null);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>({ kind: "saved" });
+  const [discarding, setDiscarding] = useState(false);
 
   const refreshFiles = useCallback(() => {
     return api.listNotes().then(setFiles, (e: unknown) => setLoadError(`无法读取笔记列表：${String(e)}`));
@@ -40,17 +43,26 @@ export function App() {
 
   // 标题变了：服务器已换成按新标题命名的文件。打开的笔记和列表立即换成新名字，不等刷新列表，
   // 否则点到旧名字会去读、去删已经不存在的旧文件。
-  const onRenamed: OnRenamed = useCallback((previousName, name) => {
+  const onRenamed = useCallback((previousName: string, name: string) => {
     setOpened((o) => (o.status === "ok" && o.name === previousName ? { ...o, name } : o));
     setFiles((fs) => fs?.map((f) => (f.name === previousName ? { ...f, name } : f)) ?? fs);
   }, []);
-  // 写完后刷新列表，刚编辑过的笔记移到顶部。
-  const autosave = useAutosave(opened.status === "ok" ? opened.target : null, onRenamed, refreshFiles);
 
-  const onNoteChange = useCallback(
-    (note: Note) => autosave.schedule(note),
-    [autosave.schedule],
-  );
+  // 打开着的笔记的自动保存。换成别的笔记（或者关掉）时停掉旧的。
+  const saveRef = useRef<SaveSession | null>(null);
+  function show(next: Opened) {
+    const save = next.status === "ok" ? next.save : null;
+    if (saveRef.current && saveRef.current !== save) stopSaving(saveRef.current);
+    saveRef.current = save;
+    setOpened(next);
+  }
+  function startSession(file: OpenedFile, fresh = false): SaveSession {
+    // 写完后刷新列表，刚编辑过的笔记移到顶部。
+    return startSaving(file, { onStatus: setSaveStatus, onRenamed, onSaved: refreshFiles }, fresh);
+  }
+  usePageEvents(opened.status === "ok" ? opened.save : null);
+
+  const onNoteChange = useCallback((note: Note) => saveRef.current?.change(serializeNote(note), note.title), []);
 
   // Ctrl+N 新建笔记。注意：普通的 Chrome 标签页里浏览器会抢先处理 Ctrl+N（打开新窗口），
   // 只有把页面安装成应用窗口时才收得到，所以侧栏里另有一个“新建笔记”按钮。
@@ -71,7 +83,9 @@ export function App() {
       const state = newNoteState(title, formatNodeTime(new Date()));
       const { name, version } = await api.createNote(title, serializeNote(state.note));
       await refreshFiles();
-      setOpened({ status: "ok", name, state, target: { name, title, version }, session: nextSession() });
+      setSaveStatus({ kind: "saved" });
+      const save = startSession({ name, title, version }, true);
+      show({ status: "ok", name, state, save, session: nextSession() });
       setLoadError(null);
     } catch (e) {
       setLoadError(`无法新建笔记：${String(e)}`);
@@ -85,41 +99,68 @@ export function App() {
       if (hit) setOpened({ ...opened, focus: { target: hit } });
       return;
     }
+    await loadFile(name, hit);
+  }
+
+  async function loadFile(name: string, hit?: NodeLocator) {
     try {
       // 先等之前的改动写完，否则可能读到旧内容。
       await whenSaved();
       const { text, version } = await api.readNote(name);
       const result = parseNote(text);
-      setOpened(
-        result.ok
-          ? {
-              status: "ok",
-              name,
-              state: initialEditorState(result.note),
-              target: { name, title: result.note.title, version },
-              session: nextSession(),
-              focus: hit && { target: hit },
-            }
-          : { status: "error", name, error: result.error },
-      );
+      if (!result.ok) {
+        show({ status: "error", name, error: result.error });
+        return;
+      }
+      // 浏览器里有这篇笔记没保存上的暂存：显示暂存的内容，自动保存已经开始写它。
+      setSaveStatus({ kind: "saved" });
+      const save = startSession({ name, title: result.note.title, version });
+      const restored = save.restored && parseNote(save.restored.text);
+      if (restored && !restored.ok) {
+        // 暂存只会是我们自己写出的内容，正常不会走到这里；解析不了就丢掉，别写到服务器上。
+        stopSaving(save, "discard");
+        show({ status: "error", name, error: `浏览器里暂存的内容无法解析，已丢弃，请重新打开：第 ${restored.error.line} 行：${restored.error.message}` });
+        return;
+      }
+      show({
+        status: "ok",
+        name,
+        state: initialEditorState(restored ? restored.note : result.note),
+        save,
+        session: nextSession(),
+        focus: hit && { target: hit },
+      });
+      if (restored) save.flush();
     } catch (e) {
-      setOpened({ status: "error", name, error: `无法读取笔记：${String(e)}` });
+      show({ status: "error", name, error: `无法读取笔记：${String(e)}` });
     }
+  }
+
+  /** 冲突后用户选择放弃这里的修改：清掉暂存，重新读服务器上的版本。 */
+  async function discardLocalChanges() {
+    setDiscarding(false);
+    if (opened.status !== "ok") return;
+    const { save } = opened;
+    stopSaving(save, "discard");
+    await save.settled();
+    await loadFile(save.fileName);
   }
 
   async function deleteNote(file: api.NoteEntry) {
     setDeleting(null);
     try {
       const isOpened = file.name === openedName;
-      const target = isOpened && opened.status === "ok" ? opened.target : null;
+      const save = isOpened && opened.status === "ok" ? opened.save : null;
       if (isOpened) {
-        autosave.discard();
-        setOpened({ status: "none" });
+        if (save) stopSaving(save, "discard");
+        show({ status: "none" });
       }
       // 等排队的写入完成，否则删掉以后又会被写出来。
       await whenSaved();
       // 打开的笔记可能刚改过名，要删的是它现在的文件。
-      await api.deleteNote(target ? target.name : file.name);
+      const name = save ? save.fileName : file.name;
+      forgetStash(name);
+      await api.deleteNote(name);
       await refreshFiles();
       setLoadError(null);
     } catch (e) {
@@ -166,7 +207,7 @@ export function App() {
         {opened.status === "error" && <ParseErrorView name={opened.name} error={opened.error} />}
         {opened.status === "ok" && (
           <>
-            <SaveIndicator status={autosave.status} />
+            <SaveIndicator status={saveStatus} onDiscard={() => setDiscarding(true)} />
             <TreeCanvas
               key={opened.session}
               initialState={opened.state}
@@ -182,6 +223,14 @@ export function App() {
             confirmLabel="删除"
             onConfirm={() => deleteNote(deleting)}
             onCancel={() => setDeleting(null)}
+          />
+        )}
+        {discarding && (
+          <ConfirmDialog
+            message="放弃这里还没保存上的修改，重新载入服务器上的版本？放弃的修改不能找回。"
+            confirmLabel="放弃并刷新"
+            onConfirm={discardLocalChanges}
+            onCancel={() => setDiscarding(false)}
           />
         )}
       </main>
@@ -215,11 +264,18 @@ function TitlePrompt({ onConfirm, onCancel }: { onConfirm: (title: string) => vo
   );
 }
 
-function SaveIndicator({ status }: { status: SaveStatus }) {
-  if (status.kind === "conflict") {
-    return <div className="save-status error">这篇笔记在别处被修改过，请刷新</div>;
+function SaveIndicator({ status, onDiscard }: { status: SaveStatus; onDiscard: () => void }) {
+  if (status.kind === "conflict" || status.kind === "error") {
+    return (
+      <div className="save-status error">
+        {status.kind === "conflict" ? "这篇笔记在别处被修改过，请刷新" : `保存失败：${status.message}（内容已暂存在浏览器里）`}
+        <button className="save-status-action" onClick={onDiscard}>
+          放弃这里的修改并刷新
+        </button>
+      </div>
+    );
   }
-  if (status.kind === "error") return <div className="save-status error">保存失败：{status.message}</div>;
+  if (status.kind === "unsaved") return <div className="save-status error">未保存（网络异常，内容已暂存在浏览器里，正在自动重试）</div>;
   if (status.kind === "pending") return <div className="save-status">未保存…</div>;
   if (status.kind === "saving") return <div className="save-status">保存中…</div>;
   return <div className="save-status">已保存</div>;

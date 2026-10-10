@@ -1,5 +1,6 @@
 // 笔记库客户端：通过服务器接口列出、读取、新建、写回（含重命名）、删除、搜索笔记。
 // 笔记用文件名标识；写回时带上基于的版本号，版本不一致服务器返回 409，这里抛出 ConflictError。
+// 其他非 2xx 抛出带状态码的 HttpError；网络错误原样抛出 fetch 的异常。
 
 import type { SearchHit } from "../core/search";
 
@@ -14,9 +15,21 @@ export interface NoteVersion {
   version: string;
 }
 
+/** 服务器返回了非 2xx 的状态码。网络错误（请求根本没到服务器）不是 HttpError。 */
+export class HttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
 /** 版本冲突（服务器返回 409）：这篇笔记在别处被修改过，不能覆盖。 */
-export class ConflictError extends Error {
-  readonly status = 409;
+export class ConflictError extends HttpError {
+  constructor(message: string) {
+    super(message, 409);
+  }
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -32,7 +45,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
       // 响应不是 JSON，用默认消息。
     }
     if (response.status === 409) throw new ConflictError(message);
-    throw new Error(message);
+    throw new HttpError(message, response.status);
   }
   return (await response.json()) as T;
 }

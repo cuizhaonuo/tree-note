@@ -1,7 +1,7 @@
 // 客户端接口模块：mock fetch，验证请求的 URL、方法、请求体和错误处理。
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ConflictError, createNote, deleteNote, listNotes, readNote, searchNotes, writeNote } from "./api";
+import { ConflictError, HttpError, createNote, deleteNote, listNotes, readNote, searchNotes, writeNote } from "./api";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -86,5 +86,13 @@ describe("错误处理", () => {
   it("其他状态码不是 ConflictError", async () => {
     mockFetch(jsonResponse({ error: "boom" }, 500));
     await expect(readNote("a.md")).rejects.not.toBeInstanceOf(ConflictError);
+  });
+
+  it("非 2xx 抛出带状态码的 HttpError，409 也是", async () => {
+    mockFetch(jsonResponse({ error: "boom" }, 503));
+    await expect(readNote("a.md")).rejects.toMatchObject({ status: 503 });
+    await expect(readNote("a.md")).rejects.toBeInstanceOf(HttpError);
+    mockFetch(jsonResponse({ error: "version conflict" }, 409));
+    await expect(writeNote("a.md", "正文", "v0")).rejects.toBeInstanceOf(HttpError);
   });
 });
