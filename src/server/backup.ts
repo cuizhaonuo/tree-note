@@ -40,15 +40,15 @@ function today(): string {
 
 // 每次导出到新文件再替换：覆盖已有文件会让它头部的修改计数加一，数据没变也会产生一次提交。
 async function snapshotDatabase(dataDir: string): Promise<void> {
-  const fresh = path.join(dataDir, `${SNAPSHOT}.tmp`);
-  await rm(fresh, { force: true });
+  const tmpSnapshot = path.join(dataDir, `${SNAPSHOT}.tmp`);
+  await rm(tmpSnapshot, { force: true });
   const db = new DatabaseSync(path.join(dataDir, "accounts.db"), { readOnly: true });
   try {
-    await backup(db, fresh);
+    await backup(db, tmpSnapshot);
   } finally {
     db.close();
   }
-  await rename(fresh, path.join(dataDir, SNAPSHOT));
+  await rename(tmpSnapshot, path.join(dataDir, SNAPSHOT));
 }
 
 /** 提交数据目录，返回是否产生了新提交。 */
@@ -60,10 +60,12 @@ function commitDataDir(dataDir: string, date: string): boolean {
   try {
     git(dataDir, "diff", "--cached", "--quiet");
     return false;
-  } catch {
-    git(dataDir, "commit", "--quiet", "-m", `backup ${date}`);
-    return true;
+  } catch (error) {
+    // 退出码 1 表示有变化，其他都是 git 本身出错。
+    if ((error as { status?: number }).status !== 1) throw error;
   }
+  git(dataDir, "commit", "--quiet", "-m", `backup ${date}`);
+  return true;
 }
 
 /** COS 请求签名，见 https://cloud.tencent.com/document/product/436/7778 。 */
