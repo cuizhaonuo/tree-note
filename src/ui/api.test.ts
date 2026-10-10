@@ -1,7 +1,7 @@
 // 客户端接口模块：mock fetch，验证请求的 URL、方法、请求体和错误处理。
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ConflictError, HttpError, changePassword, createNote, deleteNote, listNotes, login, logout, me, onUnauthorized, readNote, searchNotes, writeNote } from "./api";
+import { ConflictError, HttpError, adminCreateUser, adminListUsers, adminResetPassword, adminSetRole, adminSetStatus, changePassword, createNote, deleteNote, listNotes, login, logout, me, onUnauthorized, readNote, searchNotes, writeNote } from "./api";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -114,6 +114,57 @@ describe("changePassword", () => {
     expect(url).toBe("/api/password");
     expect(init.method).toBe("POST");
     expect(JSON.parse(init.body)).toEqual({ oldPassword: "old", newPassword: "newpassword" });
+  });
+});
+
+describe("管理接口", () => {
+  const adminUser = { username: "u1", role: "user", status: "active", createdAt: 1, lastLoginAt: null, noteCount: 2, diskBytes: 100 };
+
+  it("adminListUsers GET /api/admin/users 返回用户列表", async () => {
+    const fetchMock = mockFetch(jsonResponse([adminUser]));
+    await expect(adminListUsers()).resolves.toEqual([adminUser]);
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/users");
+  });
+
+  it("adminCreateUser POST 用户名/密码/角色，返回新建的用户", async () => {
+    const fetchMock = mockFetch(jsonResponse(adminUser, 201));
+    await expect(adminCreateUser("u1", "password1", "user")).resolves.toEqual(adminUser);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/admin/users");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({ username: "u1", password: "password1", role: "user" });
+  });
+
+  it("adminCreateUser 用户名重复时抛出服务器 409 消息", async () => {
+    mockFetch(jsonResponse({ error: "用户名已存在" }, 409));
+    await expect(adminCreateUser("u1", "password1", "user")).rejects.toMatchObject({ status: 409, message: "用户名已存在" });
+  });
+
+  it("adminResetPassword POST /password 带新密码，用户名经过编码", async () => {
+    const fetchMock = mockFetch(jsonResponse({ ok: true }));
+    await expect(adminResetPassword("我的 用户", "newpassword1")).resolves.toBeUndefined();
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(`/api/admin/users/${encodeURIComponent("我的 用户")}/password`);
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({ password: "newpassword1" });
+  });
+
+  it("adminSetStatus POST /status 带状态", async () => {
+    const fetchMock = mockFetch(jsonResponse({ ok: true }));
+    await expect(adminSetStatus("u1", "disabled")).resolves.toBeUndefined();
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/admin/users/u1/status");
+    expect(JSON.parse(init.body)).toEqual({ status: "disabled" });
+  });
+
+  it("adminSetRole POST /role 带角色；改自己时服务器返回 400 消息", async () => {
+    const fetchMock = mockFetch(jsonResponse({ ok: true }));
+    await expect(adminSetRole("u1", "admin")).resolves.toBeUndefined();
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/admin/users/u1/role");
+    expect(JSON.parse(init.body)).toEqual({ role: "admin" });
+    mockFetch(jsonResponse({ error: "不能修改自己的角色" }, 400));
+    await expect(adminSetRole("me", "user")).rejects.toMatchObject({ status: 400, message: "不能修改自己的角色" });
   });
 });
 

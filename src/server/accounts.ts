@@ -33,6 +33,12 @@ export interface User {
   status: UserStatus;
 }
 
+/** 管理员看到的用户：不含密码哈希，多了创建和最后登录时间（毫秒时间戳，未登录过为 null）。 */
+export interface AdminUser extends User {
+  createdAt: number;
+  lastLoginAt: number | null;
+}
+
 const KEY_LENGTH = 64;
 
 /** 每个密码配独立的随机盐，存成 `scrypt$<盐>$<哈希>`。 */
@@ -61,6 +67,8 @@ interface UserRow {
   password_hash: string;
   role: Role;
   status: UserStatus;
+  created_at: number;
+  last_login_at: number | null;
 }
 
 function toUser(row: UserRow): User {
@@ -222,6 +230,29 @@ export function openAccounts(dataDir: string, now: () => number = Date.now) {
     findUser(username: string): User | undefined {
       const row = userByName(username);
       return row && toUser(row);
+    },
+
+    /** 全部用户（不含密码哈希），给管理员列表用。 */
+    listUsers(): AdminUser[] {
+      const rows = db.prepare("SELECT * FROM users ORDER BY id").all() as unknown as UserRow[];
+      return rows.map((row) => ({ ...toUser(row), createdAt: row.created_at, lastLoginAt: row.last_login_at }));
+    },
+
+    /** 设置启用/禁用状态；禁用时删除全部会话，所有设备上的登录立即失效。 */
+    setStatus(userId: number, status: UserStatus): void {
+      db.prepare("UPDATE users SET status = ? WHERE id = ?").run(status, userId);
+      if (status === "disabled") deleteUserSessions(userId);
+    },
+
+    /** 管理员重置密码：重新哈希并删除这个用户的全部会话。 */
+    async resetPassword(userId: number, newPassword: string): Promise<void> {
+      db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(await hashPassword(newPassword), userId);
+      deleteUserSessions(userId);
+    },
+
+    /** 修改用户角色。 */
+    setRole(userId: number, role: Role): void {
+      db.prepare("UPDATE users SET role = ? WHERE id = ?").run(role, userId);
     },
 
     /** 关闭数据库连接。 */

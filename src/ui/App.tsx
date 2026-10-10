@@ -6,6 +6,7 @@ import type { NodeLocator, SearchHit } from "../core/search";
 import type { OpenedFile, SaveSession } from "./saveSession";
 import * as api from "./api";
 import { forgetStash, startSaving, stopSaving, usePageEvents, whenSaved, type SaveStatus } from "./autosave";
+import { AdminPage } from "./AdminPage";
 import { ChangePasswordDialog } from "./ChangePasswordDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { NoteSearch } from "./search";
@@ -35,6 +36,7 @@ export function App({ user, epoch, onLogout }: { user: api.AuthUser; epoch: numb
   const [saveStatus, setSaveStatus] = useState<SaveStatus>({ kind: "saved" });
   const [discarding, setDiscarding] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
+  const [view, setView] = useState<"notes" | "admin">("notes");
 
   const refreshFiles = useCallback(() => {
     return api.listNotes().then(setFiles, (e: unknown) => setLoadError(`无法读取笔记列表：${String(e)}`));
@@ -213,11 +215,20 @@ export function App({ user, epoch, onLogout }: { user: api.AuthUser; epoch: numb
         </NoteSearch>
         <div className="sidebar-footer">
           <span className="sidebar-username">{user.username}</span>
+          {user.role === "admin" && (
+            <button onClick={() => setView(view === "admin" ? "notes" : "admin")}>
+              {view === "admin" ? "返回笔记" : "管理"}
+            </button>
+          )}
           <button onClick={() => setChangingPassword(true)}>修改密码</button>
           <button onClick={onLogout}>退出登录</button>
         </div>
       </aside>
       <main className="main">
+        {view === "admin" ? (
+          <AdminPage user={user} />
+        ) : (
+          <>
         {opened.status === "none" && <div className="empty">从左侧选择一篇笔记</div>}
         {opened.status === "error" && <ParseErrorView name={opened.name} error={opened.error} />}
         {opened.status === "ok" && (
@@ -249,6 +260,8 @@ export function App({ user, epoch, onLogout }: { user: api.AuthUser; epoch: numb
           />
         )}
         {changingPassword && <ChangePasswordDialog onClose={() => setChangingPassword(false)} />}
+          </>
+        )}
       </main>
     </div>
   );

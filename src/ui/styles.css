@@ -316,3 +316,10 @@ button { font: inherit; color: inherit; }
   font-size: 13px;
   pointer-events: none;
 }
+
+.admin-page { padding: 24px; display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+.admin-header { display: flex; align-items: center; gap: 16px; }
+.admin-header h2 { margin: 0; font-size: 18px; }
+.admin-users { border-collapse: collapse; font-size: 14px; }
+.admin-users th, .admin-users td { padding: 6px 12px; text-align: left; border-bottom: 1px solid var(--border, #ddd); }
+.admin-users td button { margin-right: 8px; }

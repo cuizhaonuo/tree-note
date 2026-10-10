@@ -27,6 +27,33 @@ export async function listNotes(dir: string): Promise<NoteEntry[]> {
   return notes.sort((a, b) => b.lastModified - a.lastModified);
 }
 
+/** 统计目录顶层 `.md` 文件的个数和总字节数；目录不存在时都是 0。 */
+export async function dirStats(dir: string): Promise<{ count: number; bytes: number }> {
+  let entries;
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { count: 0, bytes: 0 };
+    throw error;
+  }
+  let count = 0;
+  let bytes = 0;
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".md")) continue;
+    let stat;
+    try {
+      stat = await fs.stat(path.join(dir, entry.name));
+    } catch (error) {
+      // 与并发删除竞态：readdir 后文件被删则跳过
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    count += 1;
+    bytes += stat.size;
+  }
+  return { count, bytes };
+}
+
 /** 读取笔记全文；文件不存在时返回 undefined。 */
 export async function readNote(dir: string, name: string): Promise<string | undefined> {
   try {

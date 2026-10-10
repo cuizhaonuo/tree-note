@@ -6,11 +6,11 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
-import { MIN_PASSWORD_LENGTH, SESSION_TTL_MS, type Accounts, type User } from "./accounts";
+import { MIN_PASSWORD_LENGTH, SESSION_TTL_MS, type Accounts, type Role, type User, type UserStatus } from "./accounts";
 import { isValidNoteFileName } from "../core/fileName";
 import { parseNote } from "../core/format";
 import { searchNotes, type SearchableNote } from "../core/search";
-import { createNote, deleteNote, listNotes, readNote, versionOf, writeNote } from "./store";
+import { createNote, deleteNote, dirStats, listNotes, readNote, versionOf, writeNote } from "./store";
 
 /** 取出路径里的文件名并校验；不合法时返回 undefined，由路由返回 400。 */
 function noteName(c: Context): string | undefined {
@@ -171,6 +171,85 @@ export function createApp(dataDir: string, accounts: Accounts): Hono<Env> {
     if (!name) return c.json({ error: "invalid file name" }, 400);
     const dir = await userDir(c);
     if (!(await deleteNote(dir, name))) return c.json({ error: "note not found" }, 404);
+    return c.json({ ok: true });
+  });
+
+  // 管理接口：已登录但不是管理员的请求一律 403（未登录的在上面被 401 拦住）。
+  app.use("/api/admin/*", async (c, next) => {
+    if (c.get("user").role !== "admin") return c.json({ error: "需要管理员权限" }, 403);
+    return next();
+  });
+
+  /** 按用户名找用户，找不到时返回 404 JSON。 */
+  const targetUser = (c: Context<Env>): User | undefined => {
+    const username = c.req.param("username");
+    return username === undefined ? undefined : accounts.findUser(username);
+  };
+
+  app.get("/api/admin/users", async (c) => {
+    const users = await Promise.all(
+      accounts.listUsers().map(async ({ id, ...user }) => {
+        // 只统计数量和字节数，任何接口都不能把别的用户的笔记内容交给管理员。
+        const { count, bytes } = await dirStats(path.join(dataDir, "users", String(id)));
+        return { ...user, noteCount: count, diskBytes: bytes };
+      }),
+    );
+    return c.json(users);
+  });
+
+  app.post("/api/admin/users", async (c) => {
+    const body = await parseBody(c);
+    if (
+      !body ||
+      typeof body.username !== "string" ||
+      typeof body.password !== "string" ||
+      (body.role !== "admin" && body.role !== "user")
+    ) {
+      return c.json({ error: "expected { username, password, role }" }, 400);
+    }
+    if (body.password.length < MIN_PASSWORD_LENGTH) {
+      return c.json({ error: `密码至少 ${MIN_PASSWORD_LENGTH} 个字符` }, 400);
+    }
+    if (accounts.findUser(body.username)) return c.json({ error: "用户名已被占用" }, 409);
+    const user = await accounts.createUser(body.username, body.password, body.role);
+    return c.json(user, 201);
+  });
+
+  app.post("/api/admin/users/:username/password", async (c) => {
+    const user = targetUser(c);
+    if (!user) return c.json({ error: "用户不存在" }, 404);
+    const body = await parseBody(c);
+    if (!body || typeof body.password !== "string") return c.json({ error: "expected { password }" }, 400);
+    if (body.password.length < MIN_PASSWORD_LENGTH) {
+      return c.json({ error: `密码至少 ${MIN_PASSWORD_LENGTH} 个字符` }, 400);
+    }
+    await accounts.resetPassword(user.id, body.password);
+    return c.json({ ok: true });
+  });
+
+  app.post("/api/admin/users/:username/status", async (c) => {
+    const user = targetUser(c);
+    if (!user) return c.json({ error: "用户不存在" }, 404);
+    const body = await parseBody(c);
+    if (!body || (body.status !== "active" && body.status !== "disabled")) {
+      return c.json({ error: "expected { status }" }, 400);
+    }
+    if (body.status === "disabled" && user.id === c.get("user").id) {
+      return c.json({ error: "不能禁用自己" }, 400);
+    }
+    accounts.setStatus(user.id, body.status as UserStatus);
+    return c.json({ ok: true });
+  });
+
+  app.post("/api/admin/users/:username/role", async (c) => {
+    const user = targetUser(c);
+    if (!user) return c.json({ error: "用户不存在" }, 404);
+    const body = await parseBody(c);
+    if (!body || (body.role !== "admin" && body.role !== "user")) {
+      return c.json({ error: "expected { role }" }, 400);
+    }
+    if (user.id === c.get("user").id) return c.json({ error: "不能修改自己的角色" }, 400);
+    accounts.setRole(user.id, body.role as Role);
     return c.json({ ok: true });
   });
 

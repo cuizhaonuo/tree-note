@@ -3,7 +3,7 @@
 // 其他非 2xx 抛出带状态码的 HttpError；网络错误原样抛出 fetch 的异常。
 
 import type { SearchHit } from "../core/search";
-import type { Role } from "../server/accounts";
+import type { Role, UserStatus } from "../server/accounts";
 
 /** 登录后的当前用户。 */
 export interface AuthUser {
@@ -122,4 +122,45 @@ export async function logout(): Promise<void> {
 /** 修改当前用户密码。 */
 export async function changePassword(oldPassword: string, newPassword: string): Promise<void> {
   await request<{ ok: boolean }>("/api/password", putJson({ method: "POST" }, { oldPassword, newPassword }));
+}
+
+// ---------- 管理（仅管理员） ----------
+
+/** 管理员看到的用户行：笔记只有数量和占用字节数，没有内容。 */
+export interface AdminUser {
+  username: string;
+  role: Role;
+  status: UserStatus;
+  createdAt: number;
+  lastLoginAt: number | null;
+  noteCount: number;
+  diskBytes: number;
+}
+
+function adminUserUrl(username: string, suffix = ""): string {
+  return `/api/admin/users/${encodeURIComponent(username)}${suffix}`;
+}
+
+export function adminListUsers(): Promise<AdminUser[]> {
+  return request<AdminUser[]>("/api/admin/users");
+}
+
+/** 新建用户；用户名重复（不区分大小写）时服务器返回 409，抛出带中文消息的 HttpError。 */
+export function adminCreateUser(username: string, password: string, role: Role): Promise<AdminUser> {
+  return request<AdminUser>("/api/admin/users", putJson({ method: "POST" }, { username, password, role }));
+}
+
+/** 重置某用户密码；服务器同时注销该用户的全部会话。 */
+export async function adminResetPassword(username: string, password: string): Promise<void> {
+  await request<{ ok: boolean }>(adminUserUrl(username, "/password"), putJson({ method: "POST" }, { password }));
+}
+
+/** 启用/禁用某用户；禁用时服务器注销该用户的全部会话。 */
+export async function adminSetStatus(username: string, status: UserStatus): Promise<void> {
+  await request<{ ok: boolean }>(adminUserUrl(username, "/status"), putJson({ method: "POST" }, { status }));
+}
+
+/** 修改某用户角色；不能改自己的角色（服务器返回 400）。 */
+export async function adminSetRole(username: string, role: Role): Promise<void> {
+  await request<{ ok: boolean }>(adminUserUrl(username, "/role"), putJson({ method: "POST" }, { role }));
 }
