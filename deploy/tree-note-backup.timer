@@ -1,0 +1,12 @@
+# 每天凌晨 4 点左右运行一次备份；那时服务器没开机的话，开机后补跑（Persistent）。由 deploy.sh 安装并启用。
+
+[Unit]
+Description=Run tree-note backup daily
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

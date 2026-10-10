@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 一条命令部署：拉最新代码、装依赖、构建，安装 systemd 服务和 Caddy 配置，重启服务并检查能否访问。
+# 一条命令部署：拉最新代码、装依赖、构建，安装 systemd 服务（含每日备份定时器）和 Caddy 配置，重启服务并检查能否访问。
 # 用法（在本地）：ssh <服务器> /opt/tree-note/deploy/deploy.sh
 # 全部逻辑放在 main 里并在同一行 exit：git pull 可能改写本文件，这样 bash 不会接着读到改动后的内容。
 set -euo pipefail
@@ -28,9 +28,10 @@ main() {
   git pull --ff-only
   npm ci
   npm run build
-  sudo install -m 644 deploy/tree-note.service /etc/systemd/system/tree-note.service
+  sudo install -m 644 deploy/tree-note.service deploy/tree-note-backup.service deploy/tree-note-backup.timer /etc/systemd/system/
   sudo systemctl daemon-reload
   sudo systemctl enable --quiet tree-note
+  sudo systemctl enable --quiet --now tree-note-backup.timer
   sudo systemctl restart tree-note
   if ! cmp -s deploy/Caddyfile /etc/caddy/Caddyfile; then
     sudo install -m 644 deploy/Caddyfile /etc/caddy/Caddyfile

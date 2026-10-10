@@ -1,0 +1,22 @@
+# 每日备份（src/server/backup.ts）：git 提交数据目录并把备份包上传到 COS。由 tree-note-backup.timer 触发，
+# 也可以手动运行：sudo systemctl start tree-note-backup；查看结果：journalctl -u tree-note-backup。
+# 失败时以非零状态退出，systemd 把这次运行标记为 failed 并在日志里记下错误。由 deploy.sh 安装到 /etc/systemd/system/。
+
+[Unit]
+Description=tree-note daily backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=treenote
+Group=treenote
+WorkingDirectory=/opt/tree-note
+EnvironmentFile=/etc/tree-note/tree-note.env
+ExecStart=/opt/tree-note/node_modules/.bin/tsx src/server/backup.ts
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/tree-note
+ProtectHome=true
+PrivateTmp=true
