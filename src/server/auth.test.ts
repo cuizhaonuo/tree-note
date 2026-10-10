@@ -163,11 +163,11 @@ describe("auth api", () => {
     expect((await app.request("/api/notes", { headers: { Cookie: cookie } })).status).toBe(401);
   });
 
-  it("refuses to log in a disabled user", async () => {
+  it("refuses to log in a disabled user with the same error as a wrong password", async () => {
     disableInDatabase("alice");
     const res = await login("alice", "alice-password");
-    expect(res.status).toBe(403);
-    expect(await res.json()).toEqual({ error: "账号已被禁用" });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "用户名或密码错误" });
     expect(res.headers.get("Set-Cookie")).toBeNull();
   });
 

@@ -20,7 +20,7 @@ export type UserStatus = "active" | "disabled";
 
 export type LoginResult =
   | { ok: true; user: User; sessionId: string }
-  | { ok: false; reason: "invalid" | "locked" | "disabled" };
+  | { ok: false; reason: "invalid" | "locked" };
 
 export type SessionResult =
   | { ok: true; user: User; renewed: boolean }
@@ -51,7 +51,7 @@ async function verifyPassword(password: string, stored: string): Promise<boolean
 }
 
 /** 库里只存会话 id 的哈希：数据目录会进 git 和备份，泄露的库不能直接拿来登录。 */
-function sessionKey(sessionId: string): string {
+function hashSessionId(sessionId: string): string {
   return createHash("sha256").update(sessionId).digest("hex");
 }
 
@@ -93,7 +93,14 @@ export function openAccounts(dataDir: string, now: () => number = Date.now) {
     );
   `);
 
-  const dummyHash = hashPassword(randomBytes(16).toString("hex"));
+  /** 用户名不存在时拿来比对的哈希（Promise，首次登录时才等它算完）。 */
+  const dummyPasswordHash = hashPassword(randomBytes(16).toString("hex"));
+
+  /** 会话连同它的用户；会话不存在时返回 undefined。 */
+  const sessionWithUser = (key: string) =>
+    db
+      .prepare("SELECT users.*, sessions.expires_at FROM sessions JOIN users ON users.id = sessions.user_id WHERE sessions.id = ?")
+      .get(key) as (UserRow & { expires_at: number }) | undefined;
 
   const userByName = (username: string) =>
     db.prepare("SELECT * FROM users WHERE username = ?").get(username) as UserRow | undefined;
@@ -126,7 +133,7 @@ export function openAccounts(dataDir: string, now: () => number = Date.now) {
   const createSession = (userId: number) => {
     const sessionId = randomBytes(32).toString("base64url");
     db.prepare("INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)").run(
-      sessionKey(sessionId),
+      hashSessionId(sessionId),
       userId,
       now() + SESSION_TTL_MS,
     );
@@ -134,6 +141,7 @@ export function openAccounts(dataDir: string, now: () => number = Date.now) {
   };
 
   return {
+    /** 新建用户，状态为启用；用户名重复（不分大小写）时抛出 SQLite 的唯一约束错误。 */
     async createUser(username: string, password: string, role: Role): Promise<User> {
       const passwordHash = await hashPassword(password);
       db.prepare("INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, ?, ?)").run(
@@ -146,21 +154,21 @@ export function openAccounts(dataDir: string, now: () => number = Date.now) {
     },
 
     /**
-     * 登录：用户名或 IP 被锁定时，即使密码正确也拒绝；失败同时计入用户名和 IP；被禁用的用户不能登录；
+     * 登录：用户名或 IP 被锁定时，即使密码正确也拒绝；失败同时计入用户名和 IP；
+     * 被禁用的用户不能登录，和密码错误一样处理，不透露密码其实是对的；
      * 成功时清零这个用户名的失败计数，新建会话并记下登录时间。
      */
     async login(username: string, password: string, ip: string): Promise<LoginResult> {
-      const keys = [`user:${username.toLowerCase()}`, `ip:${ip}`];
-      if (keys.some(isLocked)) return { ok: false, reason: "locked" };
+      const lockoutKeys = [`user:${username.toLowerCase()}`, `ip:${ip}`];
+      if (lockoutKeys.some(isLocked)) return { ok: false, reason: "locked" };
       const row = userByName(username);
       // 用户名不存在时也算一遍哈希，响应时间不暴露用户名是否存在。
-      const passwordHash = row?.password_hash ?? (await dummyHash);
-      if (!(await verifyPassword(password, passwordHash)) || !row) {
-        keys.forEach(recordFailure);
+      const passwordHash = row?.password_hash ?? (await dummyPasswordHash);
+      if (!(await verifyPassword(password, passwordHash)) || !row || row.status === "disabled") {
+        lockoutKeys.forEach(recordFailure);
         return { ok: false, reason: "invalid" };
       }
-      if (row.status === "disabled") return { ok: false, reason: "disabled" };
-      db.prepare("DELETE FROM login_failures WHERE key = ?").run(keys[0]);
+      db.prepare("DELETE FROM login_failures WHERE key = ?").run(lockoutKeys[0]);
       db.prepare("UPDATE users SET last_login_at = ? WHERE id = ?").run(now(), row.id);
       return { ok: true, user: toUser(row), sessionId: createSession(row.id) };
     },
@@ -171,10 +179,8 @@ export function openAccounts(dataDir: string, now: () => number = Date.now) {
      * `renewed` 告诉调用方要重新下发 cookie，其余时候不写库。
      */
     resumeSession(sessionId: string): SessionResult {
-      const key = sessionKey(sessionId);
-      const row = db
-        .prepare("SELECT users.*, sessions.expires_at FROM sessions JOIN users ON users.id = sessions.user_id WHERE sessions.id = ?")
-        .get(key) as (UserRow & { expires_at: number }) | undefined;
+      const key = hashSessionId(sessionId);
+      const row = sessionWithUser(key);
       if (!row) return { ok: false, reason: "none" };
       if (row.status === "disabled") {
         deleteUserSessions(row.id);
@@ -189,23 +195,22 @@ export function openAccounts(dataDir: string, now: () => number = Date.now) {
       return { ok: true, user: toUser(row), renewed };
     },
 
+    /** 退出登录：删除这一个会话。 */
     deleteSession(sessionId: string): void {
-      db.prepare("DELETE FROM sessions WHERE id = ?").run(sessionKey(sessionId));
+      db.prepare("DELETE FROM sessions WHERE id = ?").run(hashSessionId(sessionId));
     },
 
     /** 删除这个用户的全部会话：重置密码、禁用用户时用，所有设备上的登录立即失效。 */
     deleteUserSessions,
 
-    /** 用旧密码修改自己的密码；成功后删除这个用户除当前会话以外的所有会话。 */
+    /** 用旧密码修改当前会话所属用户的密码；成功后删除这个用户除当前会话以外的所有会话。 */
     async changePassword(
       sessionId: string,
       oldPassword: string,
       newPassword: string,
     ): Promise<"ok" | "wrong-old-password" | "too-short"> {
-      const key = sessionKey(sessionId);
-      const row = db
-        .prepare("SELECT users.* FROM sessions JOIN users ON users.id = sessions.user_id WHERE sessions.id = ?")
-        .get(key) as UserRow | undefined;
+      const key = hashSessionId(sessionId);
+      const row = sessionWithUser(key);
       if (!row || !(await verifyPassword(oldPassword, row.password_hash))) return "wrong-old-password";
       if (newPassword.length < MIN_PASSWORD_LENGTH) return "too-short";
       db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(await hashPassword(newPassword), row.id);
@@ -213,11 +218,13 @@ export function openAccounts(dataDir: string, now: () => number = Date.now) {
       return "ok";
     },
 
+    /** 按用户名（不分大小写）查用户。 */
     findUser(username: string): User | undefined {
       const row = userByName(username);
       return row && toUser(row);
     },
 
+    /** 关闭数据库连接。 */
     close(): void {
       db.close();
     },

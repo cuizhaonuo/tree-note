@@ -53,6 +53,11 @@ function clientIp(c: Context): string {
   }
 }
 
+/** 返回给前端的当前用户：用户名和角色。 */
+function publicUser(user: User): { username: string; role: User["role"] } {
+  return { username: user.username, role: user.role };
+}
+
 /** 不需要登录就能访问的接口。 */
 const PUBLIC_PATHS = new Set(["/api/login", "/api/logout"]);
 
@@ -83,10 +88,9 @@ export function createApp(dataDir: string, accounts: Accounts): Hono<Env> {
     }
     const result = await accounts.login(body.username, body.password, clientIp(c));
     if (!result.ok && result.reason === "locked") return c.json({ error: "登录失败次数过多，请稍后再试" }, 429);
-    if (!result.ok && result.reason === "disabled") return c.json({ error: "账号已被禁用" }, 403);
     if (!result.ok) return c.json({ error: "用户名或密码错误" }, 401);
     setSessionCookie(c, result.sessionId);
-    return c.json({ username: result.user.username, role: result.user.role });
+    return c.json(publicUser(result.user));
   });
 
   app.post("/api/logout", (c) => {
@@ -108,8 +112,7 @@ export function createApp(dataDir: string, accounts: Accounts): Hono<Env> {
   });
 
   app.get("/api/me", (c) => {
-    const user = c.get("user");
-    return c.json({ username: user.username, role: user.role });
+    return c.json(publicUser(c.get("user")));
   });
 
   /** 当前登录用户自己的笔记目录 `<数据目录>/users/<userId>/`：笔记接口只碰这个目录，不能跨用户读写。 */
@@ -143,7 +146,6 @@ export function createApp(dataDir: string, accounts: Accounts): Hono<Env> {
   app.put("/api/notes/:name", async (c) => {
     const name = noteName(c);
     if (!name) return c.json({ error: "invalid file name" }, 400);
-    const dir = await userDir(c);
     const body = await parseBody(c);
     if (
       !body ||
@@ -153,6 +155,7 @@ export function createApp(dataDir: string, accounts: Accounts): Hono<Env> {
     ) {
       return c.json({ error: "expected { text, version, title? }" }, 400);
     }
+    const dir = await userDir(c);
     const current = await readNote(dir, name);
     if (current === undefined) return c.json({ error: "note not found" }, 404);
     if (versionOf(current) !== body.version) return c.json({ error: "version conflict" }, 409);
