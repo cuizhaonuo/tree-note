@@ -4,7 +4,7 @@
   "description": "Keyboard-first tree notes stored as local Markdown files",
   "scripts": {
     "dev": "vite",
-    "dev:server": "DATA_DIR=.dev-data PORT=8787 tsx watch src/server/index.ts",
+    "dev:server": "DATA_DIR=.dev-data PORT=8899 tsx watch src/server/index.ts",
     "dev:all": "concurrently \"npm run dev\" \"npm run dev:server\"",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",

@@ -5,7 +5,7 @@ import { serve } from "@hono/node-server";
 import { createApp } from "./app";
 
 const dataDir = process.env.DATA_DIR ?? ".dev-data";
-const port = Number(process.env.PORT ?? 8787);
+const port = Number(process.env.PORT ?? 8899);
 
 await mkdir(dataDir, { recursive: true });
 serve({ fetch: createApp(dataDir).fetch, port }, (info) => {
