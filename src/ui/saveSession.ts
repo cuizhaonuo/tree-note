@@ -67,6 +67,29 @@ export function discardStash(storage: SaveDeps["storage"], user: string, name: s
   storage.removeItem(stashKey(user, name));
 }
 
+/**
+ * 把 fromUser 名下的全部暂存改到 toUser 名下：登录前的暂存属于占位用户，不能在登录后丢掉。
+ * 暂存键的格式只在这个文件里维护（stashKey），调用方不要自己拼键。
+ */
+export function migrateStashes(
+  storage: Pick<Storage, "length" | "key" | "getItem" | "setItem" | "removeItem">,
+  fromUser: string,
+  toUser: string,
+): void {
+  if (fromUser === toUser) return;
+  // 暂存键形如 tree-note:stash:["用户","文件名"]。
+  const prefix = `tree-note:stash:[${JSON.stringify(fromUser)},`;
+  for (let i = storage.length - 1; i >= 0; i--) {
+    const key = storage.key(i);
+    if (!key || !key.startsWith(prefix)) continue;
+    const value = storage.getItem(key);
+    if (value === null) continue;
+    // key 剩余部分是 `"文件名"]`，拼成 ["新用户","文件名"]，和 stashKey 的格式一致。
+    storage.setItem(`tree-note:stash:[${JSON.stringify(toUser)},${key.slice(prefix.length)}`, value);
+    storage.removeItem(key);
+  }
+}
+
 function readStash(storage: SaveDeps["storage"], key: string): Stash | undefined {
   try {
     const value: unknown = JSON.parse(storage.getItem(key) ?? "null");
@@ -244,6 +267,8 @@ export class SaveSession {
       // 读服务器的时候笔记可能被放弃了，不能把暂存又写回去。
       if (this.isDiscarded()) return false;
       this.writeStash();
+      // 401 是登录过期：不重试（没有会话重试也没用）也不停止，重新登录后 flush() 就能写回去。
+      if (error instanceof HttpError && error.status === 401) return false;
       if (!isRetryable(error)) {
         this.stopped = error instanceof ConflictError ? { kind: "conflict" } : { kind: "error", message: String(error) };
       } else if (!this.ended) {

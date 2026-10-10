@@ -6,6 +6,7 @@ import type { NodeLocator, SearchHit } from "../core/search";
 import type { OpenedFile, SaveSession } from "./saveSession";
 import * as api from "./api";
 import { forgetStash, startSaving, stopSaving, usePageEvents, whenSaved, type SaveStatus } from "./autosave";
+import { ChangePasswordDialog } from "./ChangePasswordDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { NoteSearch } from "./search";
 import { TreeCanvas, type FocusRequest } from "./TreeCanvas";
@@ -25,7 +26,7 @@ function nextSession(): number {
   return ++lastSession;
 }
 
-export function App() {
+export function App({ user, epoch, onLogout }: { user: api.AuthUser; epoch: number; onLogout: () => void }) {
   const [files, setFiles] = useState<api.NoteEntry[] | null>(null);
   const [opened, setOpened] = useState<Opened>({ status: "none" });
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -33,6 +34,7 @@ export function App() {
   const [deleting, setDeleting] = useState<api.NoteEntry | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>({ kind: "saved" });
   const [discarding, setDiscarding] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
 
   const refreshFiles = useCallback(() => {
     return api.listNotes().then(setFiles, (e: unknown) => setLoadError(`无法读取笔记列表：${String(e)}`));
@@ -40,6 +42,14 @@ export function App() {
   useEffect(() => {
     refreshFiles();
   }, [refreshFiles]);
+
+  // 会话中途失效后重新登录：刷新列表，清掉失效期间留下的读取错误。
+  useEffect(() => {
+    if (epoch > 0) {
+      setLoadError(null);
+      refreshFiles();
+    }
+  }, [epoch, refreshFiles]);
 
   // 标题变了：服务器已换成按新标题命名的文件。打开的笔记和列表立即换成新名字，不等刷新列表，
   // 否则点到旧名字会去读、去删已经不存在的旧文件。
@@ -201,6 +211,11 @@ export function App() {
             ))}
           </ul>
         </NoteSearch>
+        <div className="sidebar-footer">
+          <span className="sidebar-username">{user.username}</span>
+          <button onClick={() => setChangingPassword(true)}>修改密码</button>
+          <button onClick={onLogout}>退出登录</button>
+        </div>
       </aside>
       <main className="main">
         {opened.status === "none" && <div className="empty">从左侧选择一篇笔记</div>}
@@ -233,6 +248,7 @@ export function App() {
             onCancel={() => setDiscarding(false)}
           />
         )}
+        {changingPassword && <ChangePasswordDialog onClose={() => setChangingPassword(false)} />}
       </main>
     </div>
   );

@@ -3,6 +3,21 @@
 // 其他非 2xx 抛出带状态码的 HttpError；网络错误原样抛出 fetch 的异常。
 
 import type { SearchHit } from "../core/search";
+import type { Role } from "../server/accounts";
+
+/** 登录后的当前用户。 */
+export interface AuthUser {
+  username: string;
+  role: Role;
+}
+
+/** 全局 401 处理器：除登录接口外，任何接口返回 401（未登录/账号被禁用）时调用。 */
+let unauthorizedHandler: ((message: string) => void) | null = null;
+
+/** 注册（或传 null 清除）全局 401 处理器；同时只保留一个。 */
+export function onUnauthorized(cb: ((message: string) => void) | null): void {
+  unauthorizedHandler = cb;
+}
 
 export interface NoteEntry {
   name: string;
@@ -45,6 +60,9 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
       // 响应不是 JSON，用默认消息。
     }
     if (response.status === 409) throw new ConflictError(message);
+    if (response.status === 401 && url !== "/api/login" && unauthorizedHandler) {
+      unauthorizedHandler(message);
+    }
     throw new HttpError(message, response.status);
   }
   return (await response.json()) as T;
@@ -83,4 +101,25 @@ export async function deleteNote(name: string): Promise<void> {
 
 export async function searchNotes(query: string): Promise<SearchHit[]> {
   return (await request<{ hits: SearchHit[] }>(`/api/search?q=${encodeURIComponent(query)}`)).hits;
+}
+
+// ---------- 登录/账号 ----------
+
+/** 当前登录用户；未登录时抛出 401 HttpError（并触发全局 401 处理器）。 */
+export function me(): Promise<AuthUser> {
+  return request<AuthUser>("/api/me");
+}
+
+/** 登录；失败时抛出带服务器消息的 401 HttpError（不触发全局 401 处理器）。 */
+export function login(username: string, password: string): Promise<AuthUser> {
+  return request<AuthUser>("/api/login", putJson({ method: "POST" }, { username, password }));
+}
+
+export async function logout(): Promise<void> {
+  await request<{ ok: boolean }>("/api/logout", { method: "POST" });
+}
+
+/** 修改当前用户密码。 */
+export async function changePassword(oldPassword: string, newPassword: string): Promise<void> {
+  await request<{ ok: boolean }>("/api/password", putJson({ method: "POST" }, { oldPassword, newPassword }));
 }

@@ -88,6 +88,24 @@ button { font: inherit; color: inherit; }
 .note-name { font-size: 14px; }
 .note-date { font-size: 12px; color: var(--muted); }
 
+.sidebar-footer {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.sidebar-username { font-size: 14px; overflow-wrap: anywhere; }
+.sidebar-footer button {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  cursor: pointer;
+  font-size: 13px;
+}
+
 .search-input {
   padding: 6px 8px;
   border: 1px solid var(--border);
@@ -273,6 +291,18 @@ button { font: inherit; color: inherit; }
   cursor: pointer;
 }
 .dialog-actions button.danger { border-color: var(--error); background: var(--error); color: var(--panel); }
+.dialog-actions button:disabled { opacity: 0.5; cursor: default; }
+
+.login-page {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 20vh;
+  height: 100vh;
+}
+.login-form .login-title { margin: 0; font-size: 18px; }
+.login-notice { font-size: 14px; }
+.login-loading { padding-top: 20vh; text-align: center; }
 
 .hint {
   position: absolute;

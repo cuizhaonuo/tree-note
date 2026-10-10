@@ -3,7 +3,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConflictError, HttpError } from "./api";
-import { SaveSession, type SaveDeps, type SaveStatus } from "./saveSession";
+import { SaveSession, migrateStashes, type SaveDeps, type SaveStatus } from "./saveSession";
 
 /** 假服务器：版本号由内容决定，和真服务器一样；可以断网、返回 5xx、在别处改文件。 */
 function fakeServer(initial: Record<string, string>) {
@@ -15,6 +15,7 @@ function fakeServer(initial: Record<string, string>) {
     versionOf,
     goOffline: () => (failure = () => new TypeError("Failed to fetch")),
     failWith500: () => (failure = () => new HttpError("boom", 500)),
+    failWith401: () => (failure = () => new HttpError("未登录", 401)),
     goOnline: () => (failure = null),
     write: vi.fn(async (name: string, text: string, version: string, title?: string) => {
       if (failure) throw failure();
@@ -282,6 +283,41 @@ describe("打开时恢复暂存", () => {
   });
 });
 
+describe("登录过期（401）", () => {
+  it("写入 401：暂存内容、显示未保存、不重试也不停止", async () => {
+    const { session } = open("日记.md", "日记");
+    server.failWith401();
+    session.change("# 日记\n- 未登录时改的\n", "日记");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(status(session)).toBe("unsaved");
+    expect([...storage.items.keys()][0]).toContain('"alice"');
+    expect([...storage.items.values()][0]).toContain("未登录时改的");
+    expect(server.write).toHaveBeenCalledTimes(1);
+
+    // 没有会话时重试没有意义：不管等多久都不再写。
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(server.write).toHaveBeenCalledTimes(1);
+    // 没有停止：之后的改动照常进入暂存。
+    session.change("# 日记\n- 又改了\n", "日记");
+    expect([...storage.items.values()][0]).toContain("又改了");
+  });
+
+  it("重新登录后调用 flush()：写入暂存的内容、清除暂存、显示已保存", async () => {
+    const { session } = open("日记.md", "日记");
+    server.failWith401();
+    session.change("# 日记\n- 未登录时改的\n", "日记");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(status(session)).toBe("unsaved");
+
+    server.goOnline();
+    session.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(server.files.get("日记.md")).toBe("# 日记\n- 未登录时改的\n");
+    expect(status(session)).toBe("saved");
+    expect(storage.items.size).toBe(0);
+  });
+});
+
 describe("结束一次编辑", () => {
   it("discard（笔记要被删除）：清除暂存，之后不再写入", async () => {
     const { session } = open("日记.md", "日记");
@@ -337,5 +373,46 @@ describe("结束一次编辑", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(server.write).toHaveBeenCalledTimes(1);
     expect(storage.items.size).toBe(1);
+  });
+});
+
+describe("暂存迁移（migrateStashes）", () => {
+  function iterableStorage(items: Map<string, string>) {
+    return {
+      get length() {
+        return items.size;
+      },
+      key: (i: number) => [...items.keys()][i] ?? null,
+      getItem: (key: string) => items.get(key) ?? null,
+      setItem: (key: string, value: string) => void items.set(key, value),
+      removeItem: (key: string) => void items.delete(key),
+    };
+  }
+
+  it("把占位用户 local 的暂存改到登录用户名下，别的用户的暂存不动", () => {
+    const items = new Map([
+      ['tree-note:stash:["local","日记.md"]', '{"text":"a","title":"日记","version":"v1"}'],
+      ['tree-note:stash:["local","清单.md"]', '{"text":"b","title":"清单","version":"v2"}'],
+      ['tree-note:stash:["bob","日记.md"]', '{"text":"c","title":"日记","version":"v3"}'],
+      ["别的东西", "x"],
+    ]);
+    migrateStashes(iterableStorage(items), "local", "alice");
+    expect([...items.keys()].sort()).toEqual(
+      ['tree-note:stash:["alice","日记.md"]', 'tree-note:stash:["alice","清单.md"]', 'tree-note:stash:["bob","日记.md"]', "别的东西"].sort(),
+    );
+    expect(items.get('tree-note:stash:["alice","日记.md"]')).toBe('{"text":"a","title":"日记","version":"v1"}');
+  });
+
+  it("迁移后的暂存能被新用户的 SaveSession 恢复", () => {
+    const items = new Map([['tree-note:stash:["local","日记.md"]', '{"text":"# 日记\\n- 未保存\\n","title":"日记","version":"v(# 日记\\n)"}']]);
+    migrateStashes(iterableStorage(items), "local", "alice");
+    for (const [key, value] of items) storage.setItem(key, value);
+    expect(open("日记.md", "日记").session.restored?.text).toBe("# 日记\n- 未保存\n");
+  });
+
+  it("同名用户不迁移", () => {
+    const items = new Map([['tree-note:stash:["local","日记.md"]', "{}"]]);
+    migrateStashes(iterableStorage(items), "local", "local");
+    expect([...items.keys()]).toEqual(['tree-note:stash:["local","日记.md"]']);
   });
 });

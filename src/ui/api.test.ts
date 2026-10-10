@@ -1,7 +1,7 @@
 // 客户端接口模块：mock fetch，验证请求的 URL、方法、请求体和错误处理。
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ConflictError, HttpError, createNote, deleteNote, listNotes, readNote, searchNotes, writeNote } from "./api";
+import { ConflictError, HttpError, changePassword, createNote, deleteNote, listNotes, login, logout, me, onUnauthorized, readNote, searchNotes, writeNote } from "./api";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -13,7 +13,10 @@ function mockFetch(response: Response) {
   return fetchMock;
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  onUnauthorized(null);
+});
 
 describe("listNotes", () => {
   it("返回服务器给的笔记列表", async () => {
@@ -69,6 +72,75 @@ describe("searchNotes", () => {
     const fetchMock = mockFetch(jsonResponse({ hits }));
     await expect(searchNotes("你好 world")).resolves.toEqual(hits);
     expect(fetchMock.mock.calls[0][0]).toBe(`/api/search?q=${encodeURIComponent("你好 world")}`);
+  });
+});
+
+describe("login", () => {
+  it("POST /api/login 带 JSON 用户名密码，返回用户", async () => {
+    const user = { username: "u1", role: "user" };
+    const fetchMock = mockFetch(jsonResponse(user));
+    await expect(login("u1", "pw")).resolves.toEqual(user);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/login");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({ username: "u1", password: "pw" });
+  });
+});
+
+describe("me", () => {
+  it("GET /api/me 返回当前用户", async () => {
+    const user = { username: "u1", role: "admin" };
+    const fetchMock = mockFetch(jsonResponse(user));
+    await expect(me()).resolves.toEqual(user);
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/me");
+  });
+});
+
+describe("logout", () => {
+  it("POST /api/logout", async () => {
+    const fetchMock = mockFetch(jsonResponse({ ok: true }));
+    await expect(logout()).resolves.toBeUndefined();
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/logout");
+    expect(init.method).toBe("POST");
+  });
+});
+
+describe("changePassword", () => {
+  it("POST /api/password 带旧新密码", async () => {
+    const fetchMock = mockFetch(jsonResponse({ ok: true }));
+    await expect(changePassword("old", "newpassword")).resolves.toBeUndefined();
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/password");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({ oldPassword: "old", newPassword: "newpassword" });
+  });
+});
+
+describe("onUnauthorized", () => {
+  it("非登录接口 401 时先调用处理器再抛 HttpError", async () => {
+    const handler = vi.fn();
+    onUnauthorized(handler);
+    mockFetch(jsonResponse({ error: "未登录" }, 401));
+    await expect(listNotes()).rejects.toMatchObject({ status: 401, message: "未登录" });
+    expect(handler).toHaveBeenCalledWith("未登录");
+  });
+
+  it("/api/login 的 401 不触发处理器", async () => {
+    const handler = vi.fn();
+    onUnauthorized(handler);
+    mockFetch(jsonResponse({ error: "用户名或密码错误" }, 401));
+    await expect(login("u", "bad")).rejects.toMatchObject({ status: 401 });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("onUnauthorized(null) 清除处理器", async () => {
+    const handler = vi.fn();
+    onUnauthorized(handler);
+    onUnauthorized(null);
+    mockFetch(jsonResponse({ error: "未登录" }, 401));
+    await expect(listNotes()).rejects.toMatchObject({ status: 401 });
+    expect(handler).not.toHaveBeenCalled();
   });
 });
 

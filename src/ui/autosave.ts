@@ -6,12 +6,30 @@
 
 import { useEffect } from "react";
 import { readNote, writeNote } from "./api";
-import { SaveSession, discardStash, type OpenedFile, type SaveDeps, type SaveEvents } from "./saveSession";
+import { SaveSession, discardStash, migrateStashes, type OpenedFile, type SaveDeps, type SaveEvents } from "./saveSession";
 
 export type { SaveStatus } from "./saveSession";
 
-/** 暂存按用户区分；登录做好之前只有这一个本地用户。 */
-const USER = "local";
+/** 当前登录用户；setCurrentUser 设置之前为 null（此时不能开始自动保存）。 */
+let currentUser: string | null = null;
+
+/**
+ * 设置当前登录用户。登录前的暂存属于占位用户 "local"：把它们改到当前用户名下，
+ * 登录前没保存上的内容不会在登录后丢掉。
+ */
+export function setCurrentUser(username: string): void {
+  try {
+    migrateStashes(localStorage, "local", username);
+  } catch {
+    // localStorage 不可用时不迁移，和存储 shim 一样当作没有暂存。
+  }
+  currentUser = username;
+}
+
+function requireUser(): string {
+  if (currentUser === null) throw new Error("startSaving 之前必须先 setCurrentUser（登录成功后调用）");
+  return currentUser;
+}
 
 /** localStorage 不可用（比如被浏览器禁用）时当作没有暂存，不影响正常保存。 */
 const storage: SaveDeps["storage"] = {
@@ -38,7 +56,14 @@ const storage: SaveDeps["storage"] = {
   },
 };
 
-const deps: SaveDeps = { write: writeNote, read: readNote, storage, user: USER };
+const deps: SaveDeps = {
+  write: writeNote,
+  read: readNote,
+  storage,
+  get user() {
+    return requireUser();
+  },
+};
 
 /** 还没结束的会话，以及结束了但还在写最后一次的会话。 */
 const sessions = new Set<SaveSession>();
@@ -48,7 +73,7 @@ const sessions = new Set<SaveSession>();
  * 有暂存时 `session.restored` 是要显示的内容。
  */
 export function startSaving(file: OpenedFile, events: SaveEvents, fresh = false): SaveSession {
-  if (fresh) discardStash(storage, USER, file.name);
+  if (fresh) discardStash(storage, requireUser(), file.name);
   const session = new SaveSession(file, deps, events);
   sessions.add(session);
   return session;
@@ -63,7 +88,7 @@ export function stopSaving(session: SaveSession, how: "close" | "discard" = "clo
 
 /** 不是打开着的笔记被删除时，清掉它可能留下的暂存。 */
 export function forgetStash(name: string): void {
-  discardStash(storage, USER, name);
+  discardStash(storage, requireUser(), name);
 }
 
 /** 等到正在进行的写入都完成（不等待断网重试）。 */
