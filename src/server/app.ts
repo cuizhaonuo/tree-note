@@ -29,10 +29,14 @@ async function parseBody(c: Context): Promise<Record<string, unknown> | undefine
 
 const SESSION_COOKIE = "session";
 
-/** 会话 cookie：只有会话 id；纯 HTTP 阶段不加 Secure，启用 HTTPS 时再加。 */
+/**
+ * 会话 cookie：只有会话 id。请求经 HTTPS 进来时加 Secure；协议看 Caddy 写的 X-Forwarded-Proto，
+ * 它和 X-Forwarded-For 一样会覆盖客户端发来的值。本地开发是纯 HTTP，不加。
+ */
 function setSessionCookie(c: Context, sessionId: string): void {
   setCookie(c, SESSION_COOKIE, sessionId, {
     httpOnly: true,
+    secure: c.req.header("X-Forwarded-Proto") === "https",
     sameSite: "Lax",
     path: "/",
     maxAge: SESSION_TTL_MS / 1000,

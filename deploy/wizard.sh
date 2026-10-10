@@ -191,6 +191,8 @@ finish() {
 
 cd "$(dirname "$(readlink -f "$0")")/.."
 ENV_FILE=deploy/server.local
+# 站点地址，和 deploy/Caddyfile 里的域名一致；域名要先解析到服务器的公网 IP。
+SITE_URL=https://treenote.site
 TOTAL_STAGES=7
 
 banner "tree-note 部署向导"
@@ -213,11 +215,11 @@ fi
 ssh -o BatchMode=yes "$SERVER" 'sudo -n true' || { warn "$SERVER_USER 不能免密 sudo，后续步骤需要它。"; exit 1; }
 pause
 
-stage "腾讯云安全组放行 80 端口"
-say "浏览器经 80 端口访问 Caddy；Node 服务只监听本机，不要放行它的端口。"
+stage "腾讯云安全组放行 80 和 443 端口"
+say "浏览器经 Caddy 访问（443 是 HTTPS，80 用于跳转和申请证书）；Node 服务只监听本机，不要放行它的端口。"
 open_url "https://console.cloud.tencent.com/cvm/securitygroup"
 step "找到这台服务器绑定的安全组 → 修改规则 → 入站规则 → 添加规则。"
-step "来源 0.0.0.0/0，协议端口 TCP:80，策略 允许，保存。"
+step "来源 0.0.0.0/0，协议端口 TCP:80,443，策略 允许，保存。"
 step "确认 SSH 端口（默认 22）仍然放行。"
 pause "放行好了按回车"
 
@@ -243,10 +245,10 @@ stage "部署"
 say "拉最新代码、装依赖、构建、安装 systemd 服务和 Caddy 配置、重启服务。以后更新也是这一条命令："
 note "ssh $SERVER /opt/tree-note/deploy/deploy.sh"
 ssh "$SERVER" /opt/tree-note/deploy/deploy.sh
-if [[ $(curl -s -o /dev/null -m 10 -w '%{http_code}' "http://$SERVER_HOST/api/me" || true) == 401 ]]; then
-  say "从本机经公网访问 http://$SERVER_HOST/ 正常。"
+if [[ $(curl -s -o /dev/null -m 30 -w '%{http_code}' "$SITE_URL/api/me" || true) == 401 ]]; then
+  say "从本机经公网访问 $SITE_URL 正常。"
 else
-  warn "本机访问不到 http://$SERVER_HOST/，检查第 2 步的安全组规则。"
+  warn "本机访问不到 $SITE_URL：检查第 2 步的安全组规则、域名解析，以及 journalctl -u caddy 里的证书申请日志。"
 fi
 pause
 
@@ -258,9 +260,9 @@ ssh -t "$SERVER" /opt/tree-note/deploy/create-admin.sh "$ADMIN_NAME"
 pause
 
 stage "浏览器验收"
-open_url "http://$SERVER_HOST/"
+open_url "$SITE_URL/"
 step "用刚创建的管理员登录，新建一篇笔记并保存。"
-step "换一台电脑打开 http://$SERVER_HOST/ 登录同一账号，确认看到同样的笔记。"
+step "换一台电脑打开 $SITE_URL/ 登录同一账号，确认看到同样的笔记。"
 pause "都正常的话按回车"
 
 finish

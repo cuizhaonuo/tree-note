@@ -1,9 +1,18 @@
-# 对外入口：监听 80 端口，把请求转给只监听本机的 Node 服务。
+# 对外入口：treenote.site 走 HTTPS，把请求转给只监听本机的 Node 服务；其他入口都跳转到它。
+# Caddy 自动申请和续期证书，并把 HTTP 跳转到 HTTPS（安全组要放行 80 和 443）。
 # 端口必须和 /etc/tree-note/tree-note.env 里的 PORT 一致。
-# 以后有了域名，把 ":80" 换成域名，Caddy 会自动申请证书并启用 HTTPS（届时会话 cookie 也要加 Secure）。
-# Caddy 默认会用真实的客户端地址覆盖 X-Forwarded-For，服务端取最后一项作为登录锁定用的 IP。
+# Caddy 会用真实的客户端地址和协议覆盖 X-Forwarded-For / X-Forwarded-Proto，服务端据此做登录锁定和 Secure cookie。
 
-:80 {
+treenote.site {
 	encode gzip
 	reverse_proxy 127.0.0.1:8899
+}
+
+www.treenote.site {
+	redir https://treenote.site{uri} permanent
+}
+
+# 以前通过公网 IP 访问的书签。
+http://49.233.15.228 {
+	redir https://treenote.site{uri} permanent
 }

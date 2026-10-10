@@ -56,6 +56,16 @@ describe("auth api", () => {
     expect(await current.json()).toEqual({ username: "alice", role: "admin" });
   });
 
+  it("marks the session cookie Secure when the request came in over HTTPS", async () => {
+    const res = await app.request("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Forwarded-For": "10.0.0.1", "X-Forwarded-Proto": "https" },
+      body: JSON.stringify({ username: "alice", password: "alice-password" }),
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Set-Cookie")).toMatch(/Secure/i);
+  });
+
   it("gives the same error for a wrong password and an unknown username", async () => {
     const wrongPassword = await login("alice", "nope");
     const unknownUser = await login("bob", "alice-password");
