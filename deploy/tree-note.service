@@ -11,6 +11,7 @@ User=treenote
 Group=treenote
 WorkingDirectory=/opt/tree-note
 EnvironmentFile=/etc/tree-note/tree-note.env
+# 直接用 tsx 运行 TypeScript：tsx 是 devDependency，所以 deploy.sh 的 npm ci 不能省略开发依赖。
 ExecStart=/opt/tree-note/node_modules/.bin/tsx src/server/index.ts
 Restart=always
 RestartSec=2

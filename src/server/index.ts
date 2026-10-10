@@ -16,5 +16,5 @@ const app = createApp(dataDir, openAccounts(dataDir));
 // 前端静态文件；开发时没有 dist/ 也无妨，前端由 vite 提供。相对路径以启动时的工作目录（仓库根目录）为准。
 app.use("/*", serveStatic({ root: "./dist" }));
 serve({ fetch: app.fetch, hostname, port }, (info) => {
-  console.log(`notes api listening on http://${hostname}:${info.port}, data dir: ${dataDir}`);
+  console.log(`tree-note listening on http://${hostname}:${info.port}, data dir: ${dataDir}`);
 });

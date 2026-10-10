@@ -40,8 +40,8 @@ function setSessionCookie(c: Context, sessionId: string): void {
 }
 
 /**
- * 客户端 IP：生产环境 Node 只监听本机、由 Caddy 转发，Caddy 会把真实来源追加到 X-Forwarded-For 末尾，
- * 所以取最后一项；没有这个头时（直连）用 TCP 连接的对端地址。
+ * 客户端 IP：生产环境 Node 只监听本机、由 Caddy 转发。Caddy 不信任客户端发来的 X-Forwarded-For，会用真实来源覆盖它；
+ * 取最后一项，以后前面再加一层代理时也是离 Node 最近的那一跳写入的；没有这个头时（直连）用 TCP 连接的对端地址。
  */
 function clientIp(c: Context): string {
   const forwarded = c.req.header("X-Forwarded-For")?.split(",").pop()?.trim();

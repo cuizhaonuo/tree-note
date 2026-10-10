@@ -4,8 +4,8 @@
 # 全部逻辑放在 main 里并在同一行 exit：git pull 可能改写本文件，这样 bash 不会接着读到改动后的内容。
 set -euo pipefail
 
-# 经 Caddy 请求 /api/me，未登录应返回 401；最多等 20 秒。
-check() {
+# 等服务就绪：经 Caddy 请求 /api/me，未登录应返回 401；最多等 20 秒，超时则退出。
+wait_until_serving() {
   local code=""
   for _ in $(seq 20); do
     code=$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' http://127.0.0.1/api/me || true)
@@ -34,7 +34,7 @@ main() {
     sudo install -m 644 deploy/Caddyfile /etc/caddy/Caddyfile
     sudo systemctl reload caddy
   fi
-  check
+  wait_until_serving
 }
 
 main "$@"; exit
