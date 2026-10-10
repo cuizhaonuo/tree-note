@@ -6,6 +6,7 @@
     "dev": "vite",
     "dev:server": "DATA_DIR=.dev-data PORT=8899 tsx watch src/server/index.ts",
     "dev:all": "concurrently \"npm run dev\" \"npm run dev:server\"",
+    "create-admin": "tsx src/server/createAdmin.ts",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

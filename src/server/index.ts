@@ -2,12 +2,13 @@
 
 import { mkdir } from "node:fs/promises";
 import { serve } from "@hono/node-server";
+import { openAccounts } from "./accounts";
 import { createApp } from "./app";
 
 const dataDir = process.env.DATA_DIR ?? ".dev-data";
 const port = Number(process.env.PORT ?? 8899);
 
 await mkdir(dataDir, { recursive: true });
-serve({ fetch: createApp(dataDir).fetch, port }, (info) => {
+serve({ fetch: createApp(dataDir, openAccounts(dataDir)).fetch, port }, (info) => {
   console.log(`notes api listening on http://localhost:${info.port}, data dir: ${dataDir}`);
 });
