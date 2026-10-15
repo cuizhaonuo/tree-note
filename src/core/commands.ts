@@ -125,7 +125,9 @@ function execute(state: EditorState, command: Command): EditorState {
       return parent ? addNode(state, parent.id, command.time) : state;
     }
     case "select":
-      return { ...state, ...selectNode(state.note.root, state, command.nodeId) };
+      return command.nodeId === state.selectedId
+        ? state
+        : { ...state, ...selectNode(state.note.root, state, command.nodeId) };
     case "startEdit": {
       const id = command.nodeId ?? state.selectedId;
       if (!findNode(state.note.root, (n) => n.id === id)) return state;

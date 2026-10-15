@@ -117,6 +117,8 @@ export function TreeCanvas({ initialState, focus, onNoteChange }: TreeCanvasProp
     const viewport = viewportEl.current!;
     const behavior = zoom<HTMLDivElement, unknown>()
       .scaleExtent(SCALE_EXTENT)
+      // 按下到松开时手抖几个像素仍算单击（选中结点），不算拖动。
+      .clickDistance(4)
       // 编辑框里的拖动用来选择文字，不平移画布；滚轮照常缩放。
       .filter((e: Event) => defaultZoomFilter(e) && (e.type === "wheel" || !isTextInput(e.target)))
       .on("zoom", ({ transform: { x, y, k } }) => {
@@ -225,12 +227,15 @@ export function TreeCanvas({ initialState, focus, onNoteChange }: TreeCanvasProp
   const selectedTime = selected?.time;
   const lastCenteredFor = useRef({ selectedId: state.selectedId, collapsed, selectedTime });
   const centerPending = useRef(false);
+  // 单击选中的结点就在鼠标下面，不居中：否则双击的第二下会落在移动中的结点之外。
+  const clickedId = useRef<string | null>(null);
   useEffect(() => {
     const last = lastCenteredFor.current;
     if (last.selectedId !== state.selectedId || last.collapsed !== collapsed || last.selectedTime !== selectedTime) {
       lastCenteredFor.current = { selectedId: state.selectedId, collapsed, selectedTime };
-      centerPending.current = true;
+      centerPending.current = last.selectedId === state.selectedId || clickedId.current !== state.selectedId;
     }
+    clickedId.current = null;
     const box = layout.boxes.find((b) => b.node.id === state.selectedId);
     if (!centerPending.current || !box || !heights.has(box.node.id) || !zoomBehavior.current) return;
     centerPending.current = false;
@@ -287,7 +292,10 @@ export function TreeCanvas({ initialState, focus, onNoteChange }: TreeCanvasProp
                 aria-current={box.node.id === state.selectedId || undefined}
                 aria-expanded={box.node.children.length > 0 ? !isCollapsed : undefined}
                 style={{ left: box.x, top: box.y, width: box.width }}
-                onClick={() => dispatch({ type: "select", nodeId: box.node.id })}
+                onClick={() => {
+                  clickedId.current = box.node.id;
+                  dispatch({ type: "select", nodeId: box.node.id });
+                }}
                 onDoubleClick={() => dispatch({ type: "startEdit", nodeId: box.node.id })}
               >
                 <div className="node-meta">

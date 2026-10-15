@@ -224,6 +224,11 @@ describe("select (click)", () => {
     const state = run(opened, [{ type: "select", nodeId: b.id }]);
     expect(state.lastVisitedChild.get(opened.note.root.id)).toBe(b.id);
   });
+
+  it("changes nothing when the node is already selected", () => {
+    const before = selecting(open(TREE), "B");
+    expect(run(before, [{ type: "select", nodeId: before.selectedId }])).toBe(before);
+  });
 });
 
 describe("while editing", () => {
