@@ -209,11 +209,33 @@ describe("startEdit (F2 / double-click)", () => {
   });
 });
 
+describe("select (click)", () => {
+  it("selects the given node without editing it", () => {
+    const opened = open(TREE);
+    const a1 = findNode(opened.note.root, (n) => n.text === "A1")!;
+    const state = run(opened, [{ type: "select", nodeId: a1.id }]);
+    expect(state.selectedId).toBe(a1.id);
+    expect(state.editingId).toBeNull();
+  });
+
+  it("remembers the path so ↓ from the parent comes back to it", () => {
+    const opened = open(TREE);
+    const b = findNode(opened.note.root, (n) => n.text === "B")!;
+    const state = run(opened, [{ type: "select", nodeId: b.id }]);
+    expect(state.lastVisitedChild.get(opened.note.root.id)).toBe(b.id);
+  });
+});
+
 describe("while editing", () => {
   it("ignores the selection-mode commands", () => {
     const editing = run(selecting(open(TREE), "B"), [{ type: "startEdit" }]);
     expect(
-      run(editing, [{ type: "addChild", time: NOW }, { type: "addSibling", time: NOW }, { type: "startEdit" }]),
+      run(editing, [
+        { type: "addChild", time: NOW },
+        { type: "addSibling", time: NOW },
+        { type: "startEdit" },
+        { type: "select", nodeId: editing.note.root.id },
+      ]),
     ).toBe(editing);
   });
 });

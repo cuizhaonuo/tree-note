@@ -287,6 +287,7 @@ export function TreeCanvas({ initialState, focus, onNoteChange }: TreeCanvasProp
                 aria-current={box.node.id === state.selectedId || undefined}
                 aria-expanded={box.node.children.length > 0 ? !isCollapsed : undefined}
                 style={{ left: box.x, top: box.y, width: box.width }}
+                onClick={() => dispatch({ type: "select", nodeId: box.node.id })}
                 onDoubleClick={() => dispatch({ type: "startEdit", nodeId: box.node.id })}
               >
                 <div className="node-meta">

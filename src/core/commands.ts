@@ -32,6 +32,8 @@ export type Command =
   | { type: "addSibling"; time: string }
   /** 编辑状态下替换正在编辑的结点的文本。 */
   | { type: "setText"; text: string }
+  /** 选中给定的结点但不编辑（单击）。 */
+  | { type: "select"; nodeId: string }
   /** 进入编辑状态：编辑给定的结点（双击），没给就编辑选中的结点（F2）。 */
   | { type: "startEdit"; nodeId?: string }
   /** 确认编辑（Enter 或 Esc），回到选择状态。 */
@@ -55,6 +57,7 @@ export type Command =
 const SELECTION_COMMANDS: ReadonlySet<Command["type"]> = new Set([
   "addChild",
   "addSibling",
+  "select",
   "startEdit",
   "deleteSubtree",
   "cut",
@@ -121,6 +124,8 @@ function execute(state: EditorState, command: Command): EditorState {
       const parent = parentMap(state.note.root).get(state.selectedId);
       return parent ? addNode(state, parent.id, command.time) : state;
     }
+    case "select":
+      return { ...state, ...selectNode(state.note.root, state, command.nodeId) };
     case "startEdit": {
       const id = command.nodeId ?? state.selectedId;
       if (!findNode(state.note.root, (n) => n.id === id)) return state;
